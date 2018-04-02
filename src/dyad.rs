@@ -54,7 +54,7 @@ where
 
 impl<M> DyadMotif<M>
 where
-    M: Motif + Clone + Sync + Send,
+    M: Motif + Clone + Sync + Send + From<Array2<f32>>,
 {
     fn fasta_to_ctr(fname: &str) -> (GappedKmerCtr<M>, usize) {
         let mut ctr = GappedKmerCtr::new(KMER_LEN, MIN_GAP, MAX_GAP);
@@ -179,11 +179,11 @@ where
                 info!("creating dyad #{}", idx);
             }
 
-            let init = DNAMotif::from_scores(DyadMotif::<DNAMotif>::kmers_to_matrix(
+            let init: DNAMotif = (DyadMotif::<DNAMotif>::kmers_to_matrix(
                 GappedKmerCtr::<DNAMotif>::int_to_kmer(KMER_LEN, i).as_slice(),
                 k,
                 GappedKmerCtr::<DNAMotif>::int_to_kmer(KMER_LEN, j).as_slice(),
-            ));
+            )).into();
 
             if init.min_score == init.max_score {
                 info!(
@@ -243,13 +243,13 @@ where
             ind.history.push(MotifHistory::Mutate);
         }
 
-        let mut means_based = self.clone().refine_mean();
+        let means_based = self.clone().refine_mean();
         init_pop.push(means_based);
 
-        let mut meansdiv_based = self.clone().refine_meandiv();
+        let meansdiv_based = self.clone().refine_meandiv();
         init_pop.push(meansdiv_based);
 
-        let mut mode_based = self.clone().refine_via_mode();
+        let mode_based = self.clone().refine_via_mode();
         init_pop.push(mode_based);
 
         let population1 = PopulationBuilder::<DyadMotif<M>>::new()
@@ -278,7 +278,7 @@ where
         let new_scores = tally(&self.motif, self.pos_seqs.iter().map(|&(ref seq, _)| seq));
 
 
-        let mut m = M::from_scores(new_scores);
+        let m: M = new_scores.into();
         //m.normalize_scores();
         //m.calc_minmax();
 
@@ -303,7 +303,6 @@ where
     /// tally base-matches for positive seqs as in refine_mean, but also tally
     /// negetive seqs and divide positive tallies by negative before normalizing
     pub fn refine_meandiv(&self) -> DyadMotif<M> {
-        let len = self.motif.len();
         let pos_tally = tally( &self.motif, 
             self.pos_seqs.iter().map(|&(ref seq, _)| seq),
         );
@@ -311,7 +310,7 @@ where
             self.neg_seqs.iter().map(|&(ref seq, _)| seq),
         );
 
-        let mut m = M::from_scores(pos_tally / neg_tally);
+        let m: M = (pos_tally / neg_tally).into();
         //m.normalize_scores();
         //m.calc_minmax();
 
@@ -375,7 +374,7 @@ where
         for (i, b) in seq[*loc..*loc + pwm_len].iter().enumerate() {
             m[[i, M::lookup(*b).expect("refine_via_mode")]] += 0.5;
         }
-        let mut motif = M::from_scores(m);
+        let motif: M = m.into();
         //motif.normalize_scores();
         //motif.calc_minmax();
         info!(
@@ -475,7 +474,7 @@ impl MatrixPlus for DNAMotif {
 
     /// normalize scores in-place by summing each column and dividing each value
     fn normalize_scores(&mut self) {
-        let (width, bases) = self.scores.dim();
+        let width = self.scores.dim().0;
 
         for i in 0..width {
             let mut tot = 0.0;
@@ -657,7 +656,7 @@ fn crossover_motifs(
 
 impl<M> Individual for DyadMotif<M>
 where
-    M: Motif + Clone + Sync + Send,
+    M: Motif + Clone + Sync + Send + From<Array2<f32>>,
 {
     //const CAN_CROSSOVER: bool = false;
 
@@ -673,7 +672,7 @@ where
             let new_x = *x + MUT_INCR * (r - 0.5);
             *x = if new_x < 0.0 { 0.0 } else { new_x };
         }
-        self.motif = M::from_scores(scores);
+        self.motif = scores.into();
     }
 
 
@@ -759,15 +758,13 @@ pub fn find_motifs(
     pos_fname: &str,
     neg_fname: &str,
 ) -> Vec<DyadMotif<DNAMotif>> {
-    let indiv_ct = 100;
-
 
     let mut pool = make_pool(*CPU_COUNT).unwrap();
     let motifs = DyadMotif::<DNAMotif>::motifs(chosen, pos_fname, neg_fname, choose);
     motifs
         .iter()
         .enumerate()
-        .map(|(idx, dyad)| {
+        .map(|(_, dyad)| {
 
             // dyad wraps the sequences chosen by our method
             let mut new_dyad = dyad.refine(100);
