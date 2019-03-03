@@ -18,11 +18,9 @@ path = "src/choose.rs"
 
 
 [dependencies]
-pssm = { git = "https://github.com/hervold/rust-pssm", rev="2423050" }
-# { git = "https://github.com/ortho-the-d-stice/rust-pssm", rev = "64c84e9d80b13994fcdf41ee589cdf5befacbbc4" }
-bio = "*"
+bio = "0.25"
 rand = "*"
-ndarray = "0.10"
+ndarray = "0.12"
 jobsteal = "*"
 log = "*"
 env_logger = "*"

@@ -6,7 +6,7 @@ extern crate pssm;
 
 use std::env;
 use std::process::exit;
-use pssm::DNAMotif;
+use bio::pattern_matching::pssm::DNAMotif;
 use gundam::*;
 
 fn main() {

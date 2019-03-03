@@ -3,7 +3,7 @@ use std::{str, usize, mem};
 use std::ops::Index;
 use std::convert::AsRef;
 use std::marker::PhantomData;
-use pssm::{Motif, DNAMotif};
+use bio::pattern_matching::pssm::{Motif, DNAMotif};
 use ndarray::Array3;
 
 #[derive(Debug, Clone)]

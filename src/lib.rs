@@ -1,6 +1,5 @@
 #[macro_use(s)]
 extern crate ndarray;
-extern crate pssm;
 extern crate darwin_rs;
 extern crate bio;
 extern crate rand;
@@ -28,7 +27,7 @@ use std::str;
 use darwin_rs::{Individual, SimulationBuilder, Population, PopulationBuilder};
 //use darwin_rs::select::MaximizeSelector;
 
-use pssm::{Motif, ScoredPos, DNAMotif};
+use bio::pattern_matching::pssm::{Motif, ScoredPos, DNAMotif};
 use bio::io::fasta;
 use ndarray::prelude::{Array, Array2};
 use rand::Rng;

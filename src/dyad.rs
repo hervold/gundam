@@ -6,7 +6,7 @@ use darwin_rs::{Individual, SimulationBuilder, Population, PopulationBuilder};
 //use darwin_rs::select::MaximizeSelector;
 use fishers_exact::{fishers_exact, TestTails};
 
-use pssm::{Motif, ScoredPos};
+use bio::pattern_matching::pssm::{Motif, ScoredPos};
 use bio::io::fasta;
 use ndarray::prelude::{Array, Array2};
 use rand;
@@ -18,7 +18,7 @@ use super::*;
 const P_CUTOFF: f64 = 0.001;
 const MODAL_MAX_SEQS: usize = 400;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub enum MotifHistory {
     Init,
     Mutate,
@@ -29,7 +29,7 @@ pub enum MotifHistory {
 }
 
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct DyadMotif<M>
 where
     M: Motif + Clone,
