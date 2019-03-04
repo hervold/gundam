@@ -1,10 +1,9 @@
-
-use std::{str, usize, mem};
-use std::ops::Index;
+use bio::pattern_matching::pssm::{DNAMotif, Motif};
+use ndarray::Array3;
 use std::convert::AsRef;
 use std::marker::PhantomData;
-use bio::pattern_matching::pssm::{Motif, DNAMotif};
-use ndarray::Array3;
+use std::ops::Index;
+use std::{mem, str, usize};
 
 #[derive(Debug, Clone)]
 pub struct GappedKmerCtr<M>

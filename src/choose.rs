@@ -1,13 +1,13 @@
 extern crate gundam;
 #[macro_use]
 extern crate log;
+extern crate bio;
 extern crate env_logger;
-extern crate pssm;
 
-use std::env;
-use std::process::exit;
 use bio::pattern_matching::pssm::DNAMotif;
 use gundam::*;
+use std::env;
+use std::process::exit;
 
 fn main() {
     let _ = env_logger::init();

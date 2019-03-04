@@ -1,36 +1,44 @@
 extern crate gundam;
 #[macro_use]
 extern crate log;
-extern crate env_logger;
+extern crate bio;
 extern crate chrono;
 extern crate darwin_rs;
+extern crate env_logger;
+extern crate ndarray;
 
-use std::env;
-use std::process::exit;
-use std::io::{BufReader, BufRead};
-use std::fs::File;
+extern crate suffix;
+
+use std::collections::HashSet;
+use std::error::Error;
+
+use bio::alignment::distance::hamming;
+use bio::pattern_matching::pssm::Motif;
+use bio::pattern_matching::pssm::{DNAMotif, ScoredPos};
 use chrono::Local;
+use darwin_rs::individual::Individual;
 use env_logger::Builder as LogBuilder;
 use gundam::*;
-use darwin_rs::individual::Individual;
+use ndarray::prelude::Array2;
+use suffix::SuffixTable;
 
+use std::env;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::process::exit;
+use std::str;
 
-fn main() {
+const DELIMITER: u8 = b'$';
+
+fn extr_subseq<'a>(seq: &'a [u8], len: usize, sp: &ScoredPos) -> &'a [u8] {
+    return &seq[sp.loc..sp.loc + len];
+}
+
+fn main() -> Result<(), Box<Error>> {
     //env_logger::init();
     let _ = LogBuilder::new()
-/*
-        .format(|record| {
-            format!(
-                "{} [{}] - {}",
-                Local::now().format("%Y-%m-%dT%H:%M:%S"),
-                record.level(),
-                record.args()
-            )
-        })
-*/
         .parse(&env::var("RUST_LOG").unwrap_or_default())
         .init();
-        //.expect("log init");
 
     let args = env::args().collect::<Vec<String>>();
     if args.len() != 4 {
@@ -46,7 +54,8 @@ fn main() {
     let indices: Vec<(usize, usize, usize, f64)> = idx_file
         .lines()
         .map(|line| {
-            let a = line.as_ref()
+            let a = line
+                .as_ref()
                 .expect("no line?")
                 .split(",")
                 .collect::<Vec<&str>>();
@@ -59,17 +68,32 @@ fn main() {
         })
         .collect();
 
-    info!("got {} indices", indices.len());
+    let mut uniq = HashSet::new();
+    let all_dyads = DyadMotif::<DNAMotif>::motifs(indices, &args[2], &args[3], dyad::choose);
+    for dyad in all_dyads.iter() {
+        uniq.insert(dyad.refine_mean().motif.degenerate_consensus());
+    }
+    info!("{} unique motifs out of {}", uniq.len(), all_dyads.len());
+    let mut motif_v: Vec<_> = uniq.iter().collect();
+    motif_v.sort_by_key(|s| -1 * s.len() as isize);
 
-    for (idx, mut d) in find_motifs(indices, &args[2], &args[3])
-        .into_iter()
-        .enumerate()
-    {
+    let mut all_seqs: Vec<u8> = vec![];
+    let mut not_subst_idx = vec![];
+    for (idx, motif_s) in motif_v.iter().enumerate() {
+        let found = SuffixTable::new(str::from_utf8(all_seqs.as_ref())?)
+            .contains(str::from_utf8(motif_s.as_ref())?);
 
-        println!("{}: {}", idx, d.show_motif());
-        println!("{}: {}", idx, d.calculate_fitness());
-        println!("{}: {:?}", idx, d.history);
-        println!("{}: {:?}", idx, d.motif.scores);
+        if !found {
+            all_seqs.extend(motif_s.iter());
+            all_seqs.push(DELIMITER);
+
+            not_subst_idx.push(idx);
+        }
     }
 
+    for idx in not_subst_idx {
+        println!("{}", str::from_utf8(motif_v[idx].as_ref())?);
+    }
+
+    Ok(())
 }

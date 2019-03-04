@@ -1,19 +1,19 @@
-use jobsteal::{make_pool, BorrowSpliterator, Spliterator, Pool, IntoSpliterator};
-use std::{f64, usize};
+use darwin_rs::{Individual, Population, PopulationBuilder, SimulationBuilder};
+use jobsteal::{make_pool, BorrowSpliterator, IntoSpliterator, Pool, Spliterator};
+use std::cmp::{max, min};
 use std::str;
-use std::cmp::{min, max};
-use darwin_rs::{Individual, SimulationBuilder, Population, PopulationBuilder};
+use std::{f64, usize};
 //use darwin_rs::select::MaximizeSelector;
 use fishers_exact::{fishers_exact, TestTails};
 
-use bio::pattern_matching::pssm::{Motif, ScoredPos};
 use bio::io::fasta;
+use bio::pattern_matching::pssm::{Motif, ScoredPos};
 use ndarray::prelude::{Array, Array2};
 use rand;
 use rand::Rng;
 
-use ctr::*;
 use super::*;
+use ctr::*;
 
 const P_CUTOFF: f64 = 0.001;
 const MODAL_MAX_SEQS: usize = 400;
@@ -27,7 +27,6 @@ pub enum MotifHistory {
     Mode,
     Reset,
 }
-
 
 #[derive(Debug, Clone)]
 pub struct DyadMotif<M>
@@ -132,9 +131,9 @@ where
         info!("passing_kmers - created pool of {} threads", *CPU_COUNT);
         let mut indices: Vec<(usize, Vec<(usize, usize, f64)>)> =
             (0..width).map(|i| (i, vec![])).collect();
-        indices.split_iter_mut().for_each(
-            &pool.spawner(),
-            |&mut (ref i, ref mut v)| {
+        indices
+            .split_iter_mut()
+            .for_each(&pool.spawner(), |&mut (ref i, ref mut v)| {
                 //for i in 0..width {
                 for j in 0..height {
                     for k in 0..gap {
@@ -151,8 +150,7 @@ where
                         }
                     }
                 }
-            },
-        );
+            });
         let mut passing = Vec::new();
         for (i, v) in indices {
             passing.extend(v.iter().map(|&(j, k, p)| (i, j, k, p)));
@@ -167,32 +165,34 @@ where
         chooser: F,
     ) -> Vec<DyadMotif<DNAMotif>>
     where
-        F: Fn(&mut Vec<(Vec<u8>, ScoredPos)>,
-           &mut Vec<(Vec<u8>, ScoredPos)>)
-           -> Option<(Vec<(Vec<u8>, ScoredPos)>, Vec<(Vec<u8>, ScoredPos)>)>,
+        F: Fn(
+            &mut Vec<(Vec<u8>, ScoredPos)>,
+            &mut Vec<(Vec<u8>, ScoredPos)>,
+        ) -> Option<(Vec<(Vec<u8>, ScoredPos)>, Vec<(Vec<u8>, ScoredPos)>)>,
     {
         info!("using {} cpus", *CPU_COUNT);
         let mut pool = make_pool(*CPU_COUNT).unwrap();
         let mut dyads = Vec::new();
         for (idx, &(i, j, k, _)) in chosen.iter().enumerate() {
             if idx % 500 == 0 {
-                info!("creating dyad #{}", idx);
+                info!("creating dyad #{} / {}", idx, chosen.len());
             }
 
             let init: DNAMotif = (DyadMotif::<DNAMotif>::kmers_to_matrix(
                 GappedKmerCtr::<DNAMotif>::int_to_kmer(KMER_LEN, i).as_slice(),
                 k,
                 GappedKmerCtr::<DNAMotif>::int_to_kmer(KMER_LEN, j).as_slice(),
-            )).into();
+            ))
+            .into();
 
             if init.min_score == init.max_score {
-                info!(
+                debug!(
                     "skipping motif: {}",
                     String::from_utf8(init.degenerate_consensus()).expect("show_motif Q")
                 );
                 continue;
             } else {
-                info!(
+                debug!(
                     "good motif {}<{}>{}: {}",
                     i,
                     k,
@@ -230,10 +230,8 @@ where
         dyads
     }
 
-
     /// use a genetic algorithm - generate @mut_ct mutants, mutate further, and return the best
     pub fn refine_GA(&self, mut_ct: usize) -> DyadMotif<M> {
-
         // make an initial population of 100 copies of the motif
         let mut init_pop = (0..mut_ct)
             .map(|_| self.clone())
@@ -253,11 +251,11 @@ where
         init_pop.push(mode_based);
 
         let population1 = PopulationBuilder::<DyadMotif<M>>::new()
-                .initial_population(init_pop.as_slice())
-                .increasing_exp_mutation_rate(1.03)
-                .reset_limit_end(0) // disable resetting
-                .finalize()
-                .expect("PopulationBuilder");
+            .initial_population(init_pop.as_slice())
+            .increasing_exp_mutation_rate(1.03)
+            .reset_limit_end(0) // disable resetting
+            .finalize()
+            .expect("PopulationBuilder");
         let mut sim = SimulationBuilder::<DyadMotif<M>>::new()
             .iterations(11)
             .threads(1)
@@ -277,7 +275,6 @@ where
         let len = self.motif.len();
         let new_scores = tally(&self.motif, self.pos_seqs.iter().map(|&(ref seq, _)| seq));
 
-
         let m: M = new_scores.into();
         //m.normalize_scores();
         //m.calc_minmax();
@@ -295,7 +292,6 @@ where
             score: f64::NAN,
         };
 
-
         d.calculate_fitness();
         d
     }
@@ -303,12 +299,8 @@ where
     /// tally base-matches for positive seqs as in refine_mean, but also tally
     /// negetive seqs and divide positive tallies by negative before normalizing
     pub fn refine_meandiv(&self) -> DyadMotif<M> {
-        let pos_tally = tally( &self.motif, 
-            self.pos_seqs.iter().map(|&(ref seq, _)| seq),
-        );
-        let neg_tally = tally( &self.motif,
-            self.neg_seqs.iter().map(|&(ref seq, _)| seq),
-        );
+        let pos_tally = tally(&self.motif, self.pos_seqs.iter().map(|&(ref seq, _)| seq));
+        let neg_tally = tally(&self.motif, self.neg_seqs.iter().map(|&(ref seq, _)| seq));
 
         let m: M = (pos_tally / neg_tally).into();
         //m.normalize_scores();
@@ -382,11 +374,10 @@ where
             String::from_utf8(motif.degenerate_consensus()).unwrap()
         );
 
-        let mut pos: Vec<(Vec<u8>, ScoredPos)> = self.pos_seqs
+        let mut pos: Vec<(Vec<u8>, ScoredPos)> = self
+            .pos_seqs
             .iter()
-            .map(|&(ref seq, _)| {
-                (seq.clone(), motif.score(seq).expect("mode pos"))
-            })
+            .map(|&(ref seq, _)| (seq.clone(), motif.score(seq).expect("mode pos")))
             .collect();
         pos.sort_by(|&(_, ref score_a), &(_, ref score_b)| {
             score_b.sum.partial_cmp(&score_a.sum).expect("float sort")
@@ -401,11 +392,10 @@ where
 
         info!("mode cutoff of {} on {}", cutoff, pos.len());
 
-        let mut neg: Vec<(Vec<u8>, ScoredPos)> = self.neg_seqs
+        let mut neg: Vec<(Vec<u8>, ScoredPos)> = self
+            .neg_seqs
             .iter()
-            .map(|&(ref seq, _)| {
-                (seq.clone(), motif.score(seq).expect("mode neg"))
-            })
+            .map(|&(ref seq, _)| (seq.clone(), motif.score(seq).expect("mode neg")))
             .collect();
         neg.sort_by(|&(_, ref score_a), &(_, ref score_b)| {
             score_b.sum.partial_cmp(&score_a.sum).expect("float sort")
@@ -444,7 +434,6 @@ pub trait MatrixPlus {
 impl MatrixPlus for DNAMotif {
     /// apply motif to sequences in a FASTA file, returning sequences and scores
     fn eval_file(&self, pool: &mut Pool, fname: &str) -> Vec<(Vec<u8>, ScoredPos)> {
-
         // FIXME: b/c we wind up re-analyzing these files again and again,
         // we should probably just read into memory once and be done w/ it
         let mut v = Vec::new();
@@ -460,15 +449,13 @@ impl MatrixPlus for DNAMotif {
             panic!("empty file: {}", fname);
         }
 
-        v.split_iter_mut().for_each(
-            &pool.spawner(),
-            |p| match self.score(&p.0) {
-                Some(sp) => {
+        v.split_iter_mut()
+            .for_each(&pool.spawner(), |p| match self.score(&p.0) {
+                Ok(sp) => {
                     p.1 = sp;
                 }
                 _ => (),
-            },
-        );
+            });
         v
     }
 
@@ -488,14 +475,13 @@ impl MatrixPlus for DNAMotif {
     }
 }
 
-
 /// initializes array to 1.0, then increments for each base match
 fn tally<'a, I, M>(motif: &M, seqs: I) -> Array2<f32>
 where
     I: Iterator<Item = &'a Vec<u8>>,
     M: Motif,
 {
-    let len  = motif.len();
+    let len = motif.len();
     let mut new_scores = Array2::from_elem((len, 4), 1.0);
     for ref seq in seqs {
         let loc = motif.score(seq.as_slice()).expect("refine_mean - loc").loc;
@@ -505,7 +491,6 @@ where
     }
     new_scores
 }
-
 
 /// choose samples for EM
 pub fn choose(
@@ -527,15 +512,17 @@ pub fn choose(
         cutoff = i;
     }
     if cutoff == 0 {
-        println!("-- bad: pos={:?}/{}, {:?}/{}, neg={:?}/{}, {:?}/{}",
-                     str::from_utf8(&pos_v[0].0).unwrap(),
-                     pos_v[0].1.sum,
-                     str::from_utf8(&pos_v[1].0).unwrap(),
-                     pos_v[1].1.sum,
-                     str::from_utf8(&neg_v[0].0).unwrap(),
-                     neg_v[0].1.sum,
-                     str::from_utf8(&neg_v[1].0).unwrap(),
-                     neg_v[1].1.sum,);
+        warn!(
+            "-- bad: pos={:?}/{}, {:?}/{}, neg={:?}/{}, {:?}/{}",
+            str::from_utf8(&pos_v[0].0).unwrap(),
+            pos_v[0].1.sum,
+            str::from_utf8(&pos_v[1].0).unwrap(),
+            pos_v[1].1.sum,
+            str::from_utf8(&neg_v[0].0).unwrap(),
+            neg_v[0].1.sum,
+            str::from_utf8(&neg_v[1].0).unwrap(),
+            neg_v[1].1.sum,
+        );
         return None;
     }
     Some((
@@ -675,28 +662,25 @@ where
         self.motif = scores.into();
     }
 
-
     fn calculate_fitness(&mut self) -> f64 {
         // Calculate how good the data values are compared to the perfect solution
 
         let mut pool = make_pool(*CPU_COUNT).unwrap();
 
-        let pos_sum: f64 = self.pos_seqs
+        let pos_sum: f64 = self
+            .pos_seqs
             .clone()
             .split_iter()
-            .map(|&(ref seq, _)| {
-                self.motif.score(seq.iter()).expect("score?").sum as f64
-            })
+            .map(|&(ref seq, _)| self.motif.score(seq.iter()).expect("score?").sum as f64)
             .collect::<Vec<f64>>(&pool.spawner())
             .iter()
             .sum();
 
-        let neg_sum: f64 = self.neg_seqs
+        let neg_sum: f64 = self
+            .neg_seqs
             .clone()
             .split_iter()
-            .map(|&(ref seq, _)| {
-                self.motif.score(seq.iter()).expect("score?").sum as f64
-            })
+            .map(|&(ref seq, _)| self.motif.score(seq.iter()).expect("score?").sum as f64)
             .collect::<Vec<f64>>(&pool.spawner())
             .iter()
             .sum();
@@ -729,8 +713,6 @@ where
         self.score = f64::NAN;
     }
 
-
-
     /* FIXME: switched from crossover fork to regular darwin-rs
 
     fn crossover(&mut self, other: &mut Self) -> Self {
@@ -758,14 +740,12 @@ pub fn find_motifs(
     pos_fname: &str,
     neg_fname: &str,
 ) -> Vec<DyadMotif<DNAMotif>> {
-
     let mut pool = make_pool(*CPU_COUNT).unwrap();
     let motifs = DyadMotif::<DNAMotif>::motifs(chosen, pos_fname, neg_fname, choose);
     motifs
         .iter()
         .enumerate()
         .map(|(_, dyad)| {
-
             // dyad wraps the sequences chosen by our method
             let mut new_dyad = dyad.refine(100);
 
@@ -784,68 +764,25 @@ pub fn find_motifs(
         .collect()
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
     const MOTIF: &'static [u8] = b"GGCCTAGCCATG";
     const POS_FNAME: &'static str = "pos.fa"; // all contain MOTIF
-    //const POS_FNAME: &'static str = "test.fa"; // various motifs at various frequencies
+                                              //const POS_FNAME: &'static str = "test.fa"; // various motifs at various frequencies
     const NEG_FNAME: &'static str = "neg.fa";
-
 
     #[test]
     #[ignore]
     fn kmers_to_m() {
         let m = DyadMotif::<DNAMotif>::kmers_to_matrix(b"ATGC", 1, b"ATGC");
         let expected = Array::from_vec(vec![
-            0.85,
-            0.05,
-            0.05,
-            0.05,
-
-            0.05,
-            0.85,
-            0.05,
-            0.05,
-
-            0.05,
-            0.05,
-            0.85,
-            0.05,
-
-            0.05,
-            0.05,
-            0.05,
-            0.85,
-
-            0.25,
-            0.25,
-            0.25,
-            0.25,
-
-            0.85,
-            0.05,
-            0.05,
-            0.05,
-
-            0.05,
-            0.85,
-            0.05,
-            0.05,
-
-            0.05,
-            0.05,
-            0.85,
-            0.05,
-
-            0.05,
-            0.05,
-            0.05,
-            0.85,
-        ]).into_shape((9, 4))
-            .unwrap();
+            0.85, 0.05, 0.05, 0.05, 0.05, 0.85, 0.05, 0.05, 0.05, 0.05, 0.85, 0.05, 0.05, 0.05,
+            0.05, 0.85, 0.25, 0.25, 0.25, 0.25, 0.85, 0.05, 0.05, 0.05, 0.05, 0.85, 0.05, 0.05,
+            0.05, 0.05, 0.85, 0.05, 0.05, 0.05, 0.05, 0.85,
+        ])
+        .into_shape((9, 4))
+        .unwrap();
         println!("diff: {:?}", m.clone() - expected.clone());
         assert_eq!(m, expected);
     }
@@ -853,7 +790,9 @@ mod tests {
     #[test]
     #[ignore]
     fn test_one() {
-        let motif = DNAMotif::from(DyadMotif::<DNAMotif>::kmers_to_matrix(b"ATAGG", MAX_GAP, b"CCATG"));
+        let motif = DNAMotif::from(DyadMotif::<DNAMotif>::kmers_to_matrix(
+            b"ATAGG", MAX_GAP, b"CCATG",
+        ));
         println!("score for present: {:?}", motif.score(b"GGAACGAAGTCCGTAGGGTCCATAGGAAAACCACTATGGGGCAGGATAATCATTAAAGGTCACTCGGTCGAGGCACAGATTGTGAGGAAGATGTAGGGGACCGTCGTTAAACCTAACGGACGGCTACACGGTTGTTGAAATGTCCCCCCCTTTTGCATTTTTCCTATGGGCGGCGACATAAAACTCGCAGACGAAGTTGGATATCTCCCGAATACGTGGACCGGCAGCATAACCAGACAAACGGGTAACTAACGTATGAGTGTGTCCAGCCACCATCCATAGGAAGTCCCATGAGTGAGCTTGATGATGTGAGGGCATGACATGTGCGGAAAACGAAGAACTAGGACCATAATGCAGGGCGACCTGCGCTCGAAACTCTGGATTACCATTTCCGCGGCCTAATATGGATCTCCTGTGTCTCGGATCCTTCAGGTCGACGTTCGGATCATACATGGGACTACAACGTGTCGATAGACCGCCAGACCTACACAAAGCATGCA".iter()));
     }
 
@@ -890,48 +829,25 @@ mod tests {
         dyads[0].refine(100);
     }
 
-
     #[test]
     fn test_info_content() {
-
         let m = DNAMotif::from(
             Array::from_vec(vec![
-                1.0,
-                0.0,
-                0.0,
-                0.0,
-                1.0,
-                0.0,
-                0.0,
-                0.0,
-                1.0,
-                0.0,
-                0.0,
-                0.0,
-            ]).into_shape((3, 4))
-                .unwrap(),
+                1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0,
+            ])
+            .into_shape((3, 4))
+            .unwrap(),
         );
         assert_eq!(m.info_content(), 6.0);
 
         let m = DNAMotif::from(
             Array::from_vec(vec![
-                0.25,
-                0.25,
-                0.25,
-                0.25,
-                0.25,
-                0.25,
-                0.25,
-                0.25,
-                0.25,
-                0.25,
-                0.25,
-                0.25,
-            ]).into_shape((3, 4))
-                .unwrap(),
+                0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25,
+            ])
+            .into_shape((3, 4))
+            .unwrap(),
         );
         assert_eq!(m.info_content(), 0.0);
-
     }
 
     #[test]
@@ -942,7 +858,6 @@ mod tests {
         info!("{} passing kmers", v.len());
         find_motifs(v, POS_FNAME, NEG_FNAME);
     }
-
 
     #[test]
     #[ignore]
@@ -996,8 +911,9 @@ mod tests {
             0.9962687,
             0.0012437812,
             0.0012437812,
-        ]).into_shape((11, 4))
-            .unwrap();
+        ])
+        .into_shape((11, 4))
+        .unwrap();
         let motif = DNAMotif::from(m);
         println!("score: {:?}", motif.score(b"AGGGCAAGTAGCTGATTGAAGTAGCAGAGGCTGGCGTCCAAGCGGTAATAAACAAGCGATGAAAAATACTGAAGTACCTGGAGCCATTACTCAATAGGAGCAGTCCGTGAAACCTGTGCGGCGTGTAGCGAATGTTCGGCACATTATGTAAGAAGACATTTGCTTATTCACGAAATCAGCGCGAACCCTCCATCTGCCGA".iter()));
         let mut pool = make_pool(*CPU_COUNT).unwrap();

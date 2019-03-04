@@ -1,9 +1,9 @@
 #[macro_use(s)]
 extern crate ndarray;
-extern crate darwin_rs;
 extern crate bio;
-extern crate rand;
+extern crate darwin_rs;
 extern crate jobsteal;
+extern crate rand;
 #[macro_use]
 extern crate log;
 extern crate env_logger;
@@ -18,17 +18,18 @@ extern crate serde;
 extern crate serde_json;
 
 use std::ffi::{CStr, CString};
-use std::os::raw::{c_char, c_void};
+use std::fmt;
 use std::mem;
+use std::os::raw::{c_char, c_void};
 
-use jobsteal::{make_pool, BorrowSpliteratorMut, Spliterator, Pool};
+use darwin_rs::{Individual, Population, PopulationBuilder, SimulationBuilder};
+use jobsteal::{make_pool, BorrowSpliteratorMut, Pool, Spliterator};
 use std::f64;
 use std::str;
-use darwin_rs::{Individual, SimulationBuilder, Population, PopulationBuilder};
 //use darwin_rs::select::MaximizeSelector;
 
-use bio::pattern_matching::pssm::{Motif, ScoredPos, DNAMotif};
 use bio::io::fasta;
+use bio::pattern_matching::pssm::{DNAMotif, Motif, ScoredPos};
 use ndarray::prelude::{Array, Array2};
 use rand::Rng;
 
@@ -69,7 +70,7 @@ pub fn winnow_seqs(*Vec, idx, Vec<idx>)
 pub fn shannon_entropy( Vec<seq> ) -> f32
 */
 
-
+/*
 #[no_mangle]
 pub extern "C" fn release_str(somestr: *mut c_char) {
     unsafe {
@@ -166,7 +167,14 @@ pub extern "C" fn simple_mean(_dyads: *const c_void, idx: u32) -> u32 {
     new_idx as u32
 }
 
+*/
 
+pub struct Seq<'a>(pub &'a [u8]);
+impl<'a> fmt::Display for Seq<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", str::from_utf8(self.0).unwrap())
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -181,44 +189,12 @@ mod tests {
     fn kmers_to_m() {
         let m = DyadMotif::<DNAMotif>::kmers_to_matrix(b"ATGC", 1, b"ATGC");
         let expected = Array::from_vec(vec![
-            0.8,
-            0.05,
-            0.05,
-            0.05,
-            0.05,
-            0.8,
-            0.05,
-            0.05,
-            0.05,
-            0.05,
-            0.8,
-            0.05,
-            0.05,
-            0.05,
-            0.05,
-            0.8,
-            0.25,
-            0.25,
-            0.25,
-            0.25,
-            0.8,
-            0.05,
-            0.05,
-            0.05,
-            0.05,
-            0.8,
-            0.05,
-            0.05,
-            0.05,
-            0.05,
-            0.8,
-            0.05,
-            0.05,
-            0.05,
-            0.05,
-            0.8,
-        ]).into_shape((9, 4))
-            .unwrap();
+            0.8, 0.05, 0.05, 0.05, 0.05, 0.8, 0.05, 0.05, 0.05, 0.05, 0.8, 0.05, 0.05, 0.05, 0.05,
+            0.8, 0.25, 0.25, 0.25, 0.25, 0.8, 0.05, 0.05, 0.05, 0.05, 0.8, 0.05, 0.05, 0.05, 0.05,
+            0.8, 0.05, 0.05, 0.05, 0.05, 0.8,
+        ])
+        .into_shape((9, 4))
+        .unwrap();
         println!("diff: {:?}", m.clone() - expected.clone());
         assert_eq!(m, expected);
     }
@@ -227,21 +203,18 @@ mod tests {
     #[ignore]
     fn test_one() {
         let motif = DNAMotif::from(DyadMotif::<DNAMotif>::kmers_to_matrix(
-            b"ATAGG",
-            MAX_GAP,
-            b"CCATG",
+            b"ATAGG", MAX_GAP, b"CCATG",
         ));
         println!("score for present: {:?}", motif.score(b"GGAACGAAGTCCGTAGGGTCCATAGGAAAACCACTATGGGGCAGGATAATCATTAAAGGTCACTCGGTCGAGGCACAGATTGTGAGGAAGATGTAGGGGACCGTCGTTAAACCTAACGGACGGCTACACGGTTGTTGAAATGTCCCCCCCTTTTGCATTTTTCCTATGGGCGGCGACATAAAACTCGCAGACGAAGTTGGATATCTCCCGAATACGTGGACCGGCAGCATAACCAGACAAACGGGTAACTAACGTATGAGTGTGTCCAGCCACCATCCATAGGAAGTCCCATGAGTGAGCTTGATGATGTGAGGGCATGACATGTGCGGAAAACGAAGAACTAGGACCATAATGCAGGGCGACCTGCGCTCGAAACTCTGGATTACCATTTCCGCGGCCTAATATGGATCTCCTGTGTCTCGGATCCTTCAGGTCGACGTTCGGATCATACATGGGACTACAACGTGTCGATAGACCGCCAGACCTACACAAAGCATGCA".iter()));
     }
-
 
     #[test]
     #[ignore]
     fn test_find() {
         let v = DyadMotif::<DNAMotif>::passing_kmers(POS_FNAME, NEG_FNAME);
-        let dyads: Vec<DyadMotif<DNAMotif>> = DyadMotif::<DNAMotif>::motifs(v, POS_FNAME, NEG_FNAME, choose);
+        let dyads: Vec<DyadMotif<DNAMotif>> =
+            DyadMotif::<DNAMotif>::motifs(v, POS_FNAME, NEG_FNAME, choose);
         let new_dyad = dyads[0].refine(100);
-
     }
 
     #[test]
