@@ -447,7 +447,7 @@ impl<'a> MatrixPlus<'a> for DNAMotif {
             .split_iter_mut()
             .for_each(&pool.spawner(), |p| match self.score(p.0) {
                 Ok(sp) => {
-                    p.0 = b"";
+                    p.0 = &p.0[ sp.loc .. sp.loc + self.scores.dim().0 ];
                     p.1 = sp;
                 }
                 _ => (),
