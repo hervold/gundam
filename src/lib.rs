@@ -216,7 +216,7 @@ mod tests {
         let neg = read_seqs(NEG_FNAME);
         let dyads: Vec<DyadMotif<DNAMotif>> =
             DyadMotif::<DNAMotif>::motifs(v, &pos, &neg, choose);
-        let new_dyad = dyads[0].refine(100);
+        //let new_dyad = dyads[0].refine(100);
     }
 
     #[test]

@@ -29,7 +29,7 @@ pub enum MotifHistory {
 }
 
 #[derive(Debug, Clone)]
-pub struct DyadMotif<'a, 'b, M>
+pub struct DyadMotif<'a, M>
 where
     M: Motif + Clone,
 {
@@ -46,14 +46,14 @@ where
     /// sequences matching our motif
     pub pos_seqs: Vec<(&'a [u8], ScoredPos)>,
     /// sequences representing background
-    pub neg_seqs: Vec<(&'b [u8], ScoredPos)>,
+    pub neg_seqs: Vec<(&'a [u8], ScoredPos)>,
     /// score - sum(neg) / sum(pos)
     pub score: f64,
 }
 
-impl<'a, 'b, M> DyadMotif<'a, 'b, M>
+impl<'a, M> DyadMotif<'a, M>
 where
-    M: Motif + Clone + Sync + Send + From<Array2<f32>>,
+    M: 'a + Motif + Clone + Sync + Send + From<Array2<f32>>,
 {
     fn fasta_to_ctr(fname: &str) -> (GappedKmerCtr<M>, usize) {
         let mut ctr = GappedKmerCtr::new(KMER_LEN, MIN_GAP, MAX_GAP);
@@ -161,14 +161,14 @@ where
     pub fn motifs<F>(
         chosen: Vec<(usize, usize, usize, f64)>,
         pos: &'a Vec<Vec<u8>>,
-        neg: &'b Vec<Vec<u8>>,
+        neg: &'a Vec<Vec<u8>>,
         chooser: F,
-    ) -> Vec<DyadMotif<'a, 'b, DNAMotif>>
+    ) -> Vec<DyadMotif<'a, DNAMotif>>
     where
         F: Fn(
             &mut Vec<(&'a [u8], ScoredPos)>,
-            &mut Vec<(&'b [u8], ScoredPos)>,
-        ) -> Option<(Vec<(&'a [u8], ScoredPos)>, Vec<(&'b [u8], ScoredPos)>)>,
+            &mut Vec<(&'a [u8], ScoredPos)>,
+        ) -> Option<(Vec<(&'a [u8], ScoredPos)>, Vec<(&'a [u8], ScoredPos)>)>,
     {
         info!("using {} cpus", *CPU_COUNT);
         let mut pool = make_pool(*CPU_COUNT).unwrap();
@@ -231,7 +231,8 @@ where
     }
 
     /// use a genetic algorithm - generate @mut_ct mutants, mutate further, and return the best
-    pub fn refine_GA(&self, mut_ct: usize) -> DyadMotif<'a,'b, M> {
+    /*
+    pub fn refine_GA(&self, mut_ct: usize) -> DyadMotif<'a, M> {
         // make an initial population of 100 copies of the motif
         let mut init_pop = (0..mut_ct)
             .map(|_| self.clone())
@@ -269,7 +270,7 @@ where
 
         sim.simulation_result.fittest[0].individual.clone()
     }
-
+     */
     /// simple means-based refinement
     pub fn refine_mean(&self) -> DyadMotif<M> {
         let len = self.motif.len();
@@ -416,9 +417,10 @@ where
         d
     }
 
+    /*
     pub fn refine(&self, mut_ct: usize) -> DyadMotif<M> {
         self.refine_GA(mut_ct)
-    }
+    }*/
 
     /// stringified self.motif.degenerate_consensus()
     pub fn show_motif(&self) -> String {
@@ -636,7 +638,7 @@ fn crossover_motifs(
 }
 */
 
-impl<'a, 'b, M> Individual for DyadMotif<'a, 'b, M>
+impl<'a, M> Individual for DyadMotif<'a, M>
 where
     M: Motif + Clone + Sync + Send + From<Array2<f32>>,
 {
@@ -830,7 +832,7 @@ mod tests {
         let pos = read_seqs(POS_FNAME);
         let neg = read_seqs(NEG_FNAME);
         let dyads = DyadMotif::<DNAMotif>::motifs(v, &pos, &neg, choose);
-        dyads[0].refine(100);
+        //dyads[0].refine(100);
     }
 
     #[test]
@@ -860,7 +862,7 @@ mod tests {
         info!("################### test->test_find_motifs ###################");
         let v = DyadMotif::<DNAMotif>::passing_kmers(POS_FNAME, NEG_FNAME);
         info!("{} passing kmers", v.len());
-        find_motifs(v, POS_FNAME, NEG_FNAME);
+        //find_motifs(v, POS_FNAME, NEG_FNAME);
     }
 
     #[test]
