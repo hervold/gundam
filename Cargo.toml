@@ -3,9 +3,9 @@ name = "gundam"
 version = "0.1.0"
 authors = ["mario incandenza"]
 
-[lib]
-name = "gundam"
-crate-type = ["cdylib","rlib"]
+#[lib]
+#name = "gundam"
+#crate-type = ["cdylib","rlib"]
 
 
 [[bin]]

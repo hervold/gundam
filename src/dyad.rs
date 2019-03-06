@@ -29,7 +29,7 @@ pub enum MotifHistory {
 }
 
 #[derive(Debug, Clone)]
-pub struct DyadMotif<M>
+pub struct DyadMotif<'a, 'b, M>
 where
     M: Motif + Clone,
 {
@@ -44,14 +44,14 @@ where
     /// gap len
     pub gap_len: usize,
     /// sequences matching our motif
-    pub pos_seqs: Vec<(Vec<u8>, ScoredPos)>,
+    pub pos_seqs: Vec<(&'a [u8], ScoredPos)>,
     /// sequences representing background
-    pub neg_seqs: Vec<(Vec<u8>, ScoredPos)>,
+    pub neg_seqs: Vec<(&'b [u8], ScoredPos)>,
     /// score - sum(neg) / sum(pos)
     pub score: f64,
 }
 
-impl<M> DyadMotif<M>
+impl<'a, 'b, M> DyadMotif<'a, 'b, M>
 where
     M: Motif + Clone + Sync + Send + From<Array2<f32>>,
 {
@@ -160,15 +160,15 @@ where
 
     pub fn motifs<F>(
         chosen: Vec<(usize, usize, usize, f64)>,
-        pos_fname: &str,
-        neg_fname: &str,
+        pos: &'a Vec<Vec<u8>>,
+        neg: &'b Vec<Vec<u8>>,
         chooser: F,
-    ) -> Vec<DyadMotif<DNAMotif>>
+    ) -> Vec<DyadMotif<'a, 'b, DNAMotif>>
     where
         F: Fn(
-            &mut Vec<(Vec<u8>, ScoredPos)>,
-            &mut Vec<(Vec<u8>, ScoredPos)>,
-        ) -> Option<(Vec<(Vec<u8>, ScoredPos)>, Vec<(Vec<u8>, ScoredPos)>)>,
+            &mut Vec<(&'a [u8], ScoredPos)>,
+            &mut Vec<(&'b [u8], ScoredPos)>,
+        ) -> Option<(Vec<(&'a [u8], ScoredPos)>, Vec<(&'b [u8], ScoredPos)>)>,
     {
         info!("using {} cpus", *CPU_COUNT);
         let mut pool = make_pool(*CPU_COUNT).unwrap();
@@ -201,8 +201,8 @@ where
                 );
             }
 
-            let mut pos_v = init.eval_file(&mut pool, pos_fname);
-            let mut neg_v = init.eval_file(&mut pool, neg_fname);
+            let mut pos_v = init.eval_seqs(&mut pool, pos);
+            let mut neg_v = init.eval_seqs(&mut pool, neg);
             let (pos_seqs, neg_seqs) =
                 chooser(&mut pos_v, &mut neg_v).expect("motifs found bad one (1)");
 
@@ -231,11 +231,11 @@ where
     }
 
     /// use a genetic algorithm - generate @mut_ct mutants, mutate further, and return the best
-    pub fn refine_GA(&self, mut_ct: usize) -> DyadMotif<M> {
+    pub fn refine_GA(&self, mut_ct: usize) -> DyadMotif<'a,'b, M> {
         // make an initial population of 100 copies of the motif
         let mut init_pop = (0..mut_ct)
             .map(|_| self.clone())
-            .collect::<Vec<DyadMotif<M>>>();
+            .collect::<Vec<_>>();
         for ind in init_pop.iter_mut() {
             ind.mutate();
             ind.history.push(MotifHistory::Mutate);
@@ -273,7 +273,7 @@ where
     /// simple means-based refinement
     pub fn refine_mean(&self) -> DyadMotif<M> {
         let len = self.motif.len();
-        let new_scores = tally(&self.motif, self.pos_seqs.iter().map(|&(ref seq, _)| seq));
+        let new_scores = tally(&self.motif, self.pos_seqs.iter().map(|(ref seq, _)| *seq));
 
         let m: M = new_scores.into();
         //m.normalize_scores();
@@ -299,8 +299,8 @@ where
     /// tally base-matches for positive seqs as in refine_mean, but also tally
     /// negetive seqs and divide positive tallies by negative before normalizing
     pub fn refine_meandiv(&self) -> DyadMotif<M> {
-        let pos_tally = tally(&self.motif, self.pos_seqs.iter().map(|&(ref seq, _)| seq));
-        let neg_tally = tally(&self.motif, self.neg_seqs.iter().map(|&(ref seq, _)| seq));
+        let pos_tally = tally(&self.motif, self.pos_seqs.iter().map(|(ref seq, _)| *seq));
+        let neg_tally = tally(&self.motif, self.neg_seqs.iter().map(|(ref seq, _)| *seq));
 
         let m: M = (pos_tally / neg_tally).into();
         //m.normalize_scores();
@@ -374,10 +374,10 @@ where
             String::from_utf8(motif.degenerate_consensus()).unwrap()
         );
 
-        let mut pos: Vec<(Vec<u8>, ScoredPos)> = self
+        let mut pos: Vec<(&[u8], ScoredPos)> = self
             .pos_seqs
             .iter()
-            .map(|&(ref seq, _)| (seq.clone(), motif.score(seq).expect("mode pos")))
+            .map(|&(ref seq, _)| (seq.clone(), motif.score(*seq).expect("mode pos")))
             .collect();
         pos.sort_by(|&(_, ref score_a), &(_, ref score_b)| {
             score_b.sum.partial_cmp(&score_a.sum).expect("float sort")
@@ -392,10 +392,10 @@ where
 
         info!("mode cutoff of {} on {}", cutoff, pos.len());
 
-        let mut neg: Vec<(Vec<u8>, ScoredPos)> = self
+        let mut neg: Vec<(&[u8], ScoredPos)> = self
             .neg_seqs
             .iter()
-            .map(|&(ref seq, _)| (seq.clone(), motif.score(seq).expect("mode neg")))
+            .map(|&(ref seq, _)| (seq.clone(), motif.score(*seq).expect("mode neg")))
             .collect();
         neg.sort_by(|&(_, ref score_a), &(_, ref score_b)| {
             score_b.sum.partial_cmp(&score_a.sum).expect("float sort")
@@ -426,37 +426,32 @@ where
     }
 }
 
-pub trait MatrixPlus {
-    fn eval_file(&self, pool: &mut Pool, fname: &str) -> Vec<(Vec<u8>, ScoredPos)>;
+pub trait MatrixPlus<'a> {
+    fn eval_seqs(&self, pool: &mut Pool, seqs: &'a Vec<Vec<u8>>) -> Vec<(&'a [u8], ScoredPos)>;
     fn normalize_scores(&mut self);
 }
 
-impl MatrixPlus for DNAMotif {
+impl<'a> MatrixPlus<'a> for DNAMotif {
     /// apply motif to sequences in a FASTA file, returning sequences and scores
-    fn eval_file(&self, pool: &mut Pool, fname: &str) -> Vec<(Vec<u8>, ScoredPos)> {
+    fn eval_seqs(&self, pool: &mut Pool, seqs: &'a Vec<Vec<u8>>) -> Vec<(&'a [u8], ScoredPos)> {
         // FIXME: b/c we wind up re-analyzing these files again and again,
         // we should probably just read into memory once and be done w/ it
-        let mut v = Vec::new();
-        for _rec in fasta::Reader::from_file(fname)
-            .expect(format!("couldn't open {}", fname).as_str())
-            .records()
-        {
-            let rec = _rec.expect("unwrap record");
-            v.push((rec.seq().to_vec(), ScoredPos::default()));
-        }
 
-        if v.len() == 0 {
-            panic!("empty file: {}", fname);
-        }
-
-        v.split_iter_mut()
-            .for_each(&pool.spawner(), |p| match self.score(&p.0) {
+        let mut results: Vec<(&'a [u8], ScoredPos)> = seqs
+            .iter()
+            .map(|seq| (seq.as_ref(), ScoredPos::default()))
+            .collect();
+        results
+            .split_iter_mut()
+            .for_each(&pool.spawner(), |p| match self.score(p.0) {
                 Ok(sp) => {
+                    p.0 = b"";
                     p.1 = sp;
                 }
                 _ => (),
             });
-        v
+
+        results
     }
 
     /// normalize scores in-place by summing each column and dividing each value
@@ -478,13 +473,13 @@ impl MatrixPlus for DNAMotif {
 /// initializes array to 1.0, then increments for each base match
 fn tally<'a, I, M>(motif: &M, seqs: I) -> Array2<f32>
 where
-    I: Iterator<Item = &'a Vec<u8>>,
+    I: Iterator<Item = &'a [u8]>,
     M: Motif,
 {
     let len = motif.len();
     let mut new_scores = Array2::from_elem((len, 4), 1.0);
     for ref seq in seqs {
-        let loc = motif.score(seq.as_slice()).expect("refine_mean - loc").loc;
+        let loc = motif.score(*seq).expect("refine_mean - loc").loc;
         for i in 0..len {
             new_scores[[i, M::lookup(seq[loc + i]).expect("tally")]] += 1.0;
         }
@@ -493,10 +488,10 @@ where
 }
 
 /// choose samples for EM
-pub fn choose(
-    pos_v: &mut Vec<(Vec<u8>, ScoredPos)>,
-    neg_v: &mut Vec<(Vec<u8>, ScoredPos)>,
-) -> Option<(Vec<(Vec<u8>, ScoredPos)>, Vec<(Vec<u8>, ScoredPos)>)> {
+pub fn choose<'a>(
+    pos_v: &mut Vec<(&'a [u8], ScoredPos)>,
+    neg_v: &mut Vec<(&'a [u8], ScoredPos)>,
+) -> Option<(Vec<(&'a [u8], ScoredPos)>, Vec<(&'a [u8], ScoredPos)>)> {
     pos_v.sort_by(|&(_, ref score_a), &(_, ref score_b)| {
         score_b.sum.partial_cmp(&score_a.sum).expect("float sort")
     });
@@ -641,7 +636,7 @@ fn crossover_motifs(
 }
 */
 
-impl<M> Individual for DyadMotif<M>
+impl<'a, 'b, M> Individual for DyadMotif<'a, 'b, M>
 where
     M: Motif + Clone + Sync + Send + From<Array2<f32>>,
 {
@@ -735,32 +730,39 @@ where
     }*/
 }
 
-pub fn find_motifs(
+/*
+pub fn find_motifs<'a, 'b>(
     chosen: Vec<(usize, usize, usize, f64)>,
-    pos_fname: &str,
-    neg_fname: &str,
-) -> Vec<DyadMotif<DNAMotif>> {
+    pos: &'a Vec<Vec<u8>>,
+    neg: &'b  Vec<Vec<u8>>
+) -> Vec<DyadMotif<'a, 'b, DNAMotif>> {
     let mut pool = make_pool(*CPU_COUNT).unwrap();
-    let motifs = DyadMotif::<DNAMotif>::motifs(chosen, pos_fname, neg_fname, choose);
+    let motifs = DyadMotif::<DNAMotif>::motifs(chosen, pos, neg, choose);
     motifs
         .iter()
-        .enumerate()
-        .map(|(_, dyad)| {
+        .map(|ref dyad| {
             // dyad wraps the sequences chosen by our method
             let mut new_dyad = dyad.refine(100);
 
             // now that the GA has [hopefully] improved our PWM, we need to choose new seqs
-            let mut pos_v = new_dyad.motif.eval_file(&mut pool, pos_fname);
-            let mut neg_v = new_dyad.motif.eval_file(&mut pool, neg_fname);
+            let mut pos_v = new_dyad.motif.eval_seqs(&mut pool, pos);
+            let mut neg_v = new_dyad.motif.eval_seqs(&mut pool, neg);
             let (pos_seqs, neg_seqs) =
                 choose(&mut pos_v, &mut neg_v).expect("motifs found bad one (2)");
             new_dyad.pos_seqs = pos_seqs;
             new_dyad.neg_seqs = neg_seqs;
 
-            //new_dyad.repopulate_seqs(pos_fname, neg_fname, choose);
-            let new2 = new_dyad.refine(100);
-            new2
+            new_dyad.refine(100)
         })
+        .collect()
+}
+ */
+
+pub fn read_seqs(fname: &str) -> Vec<Vec<u8>> {
+    fasta::Reader::from_file(fname)
+        .expect(format!("couldn't open {}", fname).as_str())
+        .records()
+        .map(|_rec| _rec.expect("unwrap record").seq().to_vec())
         .collect()
 }
 
@@ -825,7 +827,9 @@ mod tests {
     fn test_find_one_motif() {
         println!("dyad::test_find");
         let v = DyadMotif::<DNAMotif>::passing_kmers(POS_FNAME, NEG_FNAME);
-        let dyads = DyadMotif::<DNAMotif>::motifs(v, POS_FNAME, NEG_FNAME, choose);
+        let pos = read_seqs(POS_FNAME);
+        let neg = read_seqs(NEG_FNAME);
+        let dyads = DyadMotif::<DNAMotif>::motifs(v, &pos, &neg, choose);
         dyads[0].refine(100);
     }
 
@@ -918,8 +922,11 @@ mod tests {
         println!("score: {:?}", motif.score(b"AGGGCAAGTAGCTGATTGAAGTAGCAGAGGCTGGCGTCCAAGCGGTAATAAACAAGCGATGAAAAATACTGAAGTACCTGGAGCCATTACTCAATAGGAGCAGTCCGTGAAACCTGTGCGGCGTGTAGCGAATGTTCGGCACATTATGTAAGAAGACATTTGCTTATTCACGAAATCAGCGCGAACCCTCCATCTGCCGA".iter()));
         let mut pool = make_pool(*CPU_COUNT).unwrap();
 
-        let mut p = motif.eval_file(&mut pool, POS_FNAME);
-        let mut n = motif.eval_file(&mut pool, NEG_FNAME);
+        let pos_seqs = read_seqs(POS_FNAME);
+        let neg_seqs = read_seqs(NEG_FNAME);
+
+        let mut p = motif.eval_seqs(&mut pool, &pos_seqs);
+        let mut n = motif.eval_seqs(&mut pool, &neg_seqs);
         println!("p: {:?}", p.iter().map(|t| t.1.sum).collect::<Vec<f32>>());
         let (pos_seqs, neg_seqs) = choose(&mut p, &mut n).expect("motifs found bad one (2)");
         println!("pos_seqs.len: {}", pos_seqs.len());

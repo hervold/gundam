@@ -39,7 +39,7 @@ use ctr::*;
 pub mod dyad;
 pub use dyad::*;
 
-pub use dyad::find_motifs;
+//pub use dyad::find_motifs;
 
 const KMER_LEN: usize = 5;
 const MIN_GAP: usize = 0;
@@ -212,8 +212,10 @@ mod tests {
     #[ignore]
     fn test_find() {
         let v = DyadMotif::<DNAMotif>::passing_kmers(POS_FNAME, NEG_FNAME);
+        let pos = read_seqs(POS_FNAME);
+        let neg = read_seqs(NEG_FNAME);
         let dyads: Vec<DyadMotif<DNAMotif>> =
-            DyadMotif::<DNAMotif>::motifs(v, POS_FNAME, NEG_FNAME, choose);
+            DyadMotif::<DNAMotif>::motifs(v, &pos, &neg, choose);
         let new_dyad = dyads[0].refine(100);
     }
 
