@@ -17,6 +17,11 @@ name = "gundam_kmer"
 path = "src/choose.rs"
 
 
+[[bin]]
+name = "gundam_converge"
+path = "src/converge.rs"
+
+
 [dependencies]
 bio = "0.25"
 rand = "*"

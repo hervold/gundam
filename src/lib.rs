@@ -30,7 +30,7 @@ use std::str;
 
 use bio::io::fasta;
 use bio::pattern_matching::pssm::{DNAMotif, Motif, ScoredPos};
-use ndarray::prelude::{Array, Array2};
+use ndarray::prelude::{Array, Array2, AsArray};
 use rand::Rng;
 
 pub mod ctr;
@@ -41,7 +41,7 @@ pub use dyad::*;
 
 //pub use dyad::find_motifs;
 
-const KMER_LEN: usize = 5;
+pub const KMER_LEN: usize = 5;
 const MIN_GAP: usize = 0;
 const MAX_GAP: usize = 20;
 const MUT_INCR: f32 = 0.2;
@@ -214,8 +214,7 @@ mod tests {
         let v = DyadMotif::<DNAMotif>::passing_kmers(POS_FNAME, NEG_FNAME);
         let pos = read_seqs(POS_FNAME);
         let neg = read_seqs(NEG_FNAME);
-        let dyads: Vec<DyadMotif<DNAMotif>> =
-            DyadMotif::<DNAMotif>::motifs(v, &pos, &neg, choose);
+        let dyads: Vec<DyadMotif<DNAMotif>> = DyadMotif::<DNAMotif>::motifs(v, &pos, &neg, choose);
         //let new_dyad = dyads[0].refine(100);
     }
 

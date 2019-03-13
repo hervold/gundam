@@ -69,9 +69,9 @@ fn main() -> Result<(), Box<Error>> {
         .collect();
 
     let mut uniq = HashSet::new();
-    let pos = read_seqs( &args[2]);
-    let neg = read_seqs( &args[3]);
-    
+    let pos = read_seqs(&args[2]);
+    let neg = read_seqs(&args[3]);
+
     let all_dyads = DyadMotif::<DNAMotif>::motifs(indices, &pos, &neg, dyad::choose);
     for dyad in all_dyads.iter() {
         uniq.insert(dyad.refine_mean().motif.degenerate_consensus());

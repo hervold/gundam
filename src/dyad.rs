@@ -7,7 +7,7 @@ use std::{f64, usize};
 use fishers_exact::{fishers_exact, TestTails};
 
 use bio::io::fasta;
-use bio::pattern_matching::pssm::{Motif, ScoredPos};
+use bio::pattern_matching::pssm::{Motif, PSSMError, ScoredPos};
 use ndarray::prelude::{Array, Array2};
 use rand;
 use rand::Rng;
@@ -34,7 +34,7 @@ where
     M: Motif + Clone,
 {
     /// initial state based on kmers
-    init: M,
+    pub init: M,
     /// history of actions that produced this motif
     pub history: Vec<MotifHistory>,
     /// weights updated by GA
@@ -277,8 +277,6 @@ where
         let new_scores = tally(&self.motif, self.pos_seqs.iter().map(|(ref seq, _)| *seq));
 
         let m: M = new_scores.into();
-        //m.normalize_scores();
-        //m.calc_minmax();
 
         let mut hist = self.history.to_owned();
         hist.push(MotifHistory::Mean);
@@ -431,6 +429,7 @@ where
 pub trait MatrixPlus<'a> {
     fn eval_seqs(&self, pool: &mut Pool, seqs: &'a Vec<Vec<u8>>) -> Vec<(&'a [u8], ScoredPos)>;
     fn normalize_scores(&mut self);
+    fn from_degen(seq: &[u8]) -> Result<Box<Self>, PSSMError>;
 }
 
 impl<'a> MatrixPlus<'a> for DNAMotif {
@@ -447,7 +446,7 @@ impl<'a> MatrixPlus<'a> for DNAMotif {
             .split_iter_mut()
             .for_each(&pool.spawner(), |p| match self.score(p.0) {
                 Ok(sp) => {
-                    p.0 = &p.0[ sp.loc .. sp.loc + self.scores.dim().0 ];
+                    p.0 = &p.0[sp.loc..sp.loc + self.scores.dim().0];
                     p.1 = sp;
                 }
                 _ => (),
@@ -469,6 +468,69 @@ impl<'a> MatrixPlus<'a> for DNAMotif {
                 self.scores[[i, j]] = self.scores[[i, j]] / tot;
             }
         }
+    }
+
+    fn from_degen(seq: &[u8]) -> Result<Box<Self>, PSSMError> {
+        let mut m: Array2<f32> = Array2::from_elem((seq.len(), DNAMotif::MONO_CT), 0.001);
+        for (i, b) in seq.iter().enumerate() {
+            match *b {
+                b'A' | b'T' | b'G' | b'C' => {
+                    m[[i, DNAMotif::lookup(*b)?]] = 1.0;
+                }
+                b'M' => {
+                    m[[i, DNAMotif::lookup(b'A')?]] = 0.5;
+                    m[[i, DNAMotif::lookup(b'C')?]] = 0.5;
+                }
+                b'R' => {
+                    m[[i, DNAMotif::lookup(b'A')?]] = 0.5;
+                    m[[i, DNAMotif::lookup(b'G')?]] = 0.5;
+                }
+                b'W' => {
+                    m[[i, DNAMotif::lookup(b'A')?]] = 0.5;
+                    m[[i, DNAMotif::lookup(b'T')?]] = 0.5;
+                }
+                b'S' => {
+                    m[[i, DNAMotif::lookup(b'C')?]] = 0.5;
+                    m[[i, DNAMotif::lookup(b'G')?]] = 0.5;
+                }
+                b'Y' => {
+                    m[[i, DNAMotif::lookup(b'C')?]] = 0.5;
+                    m[[i, DNAMotif::lookup(b'T')?]] = 0.5;
+                }
+                b'K' => {
+                    m[[i, DNAMotif::lookup(b'G')?]] = 0.5;
+                    m[[i, DNAMotif::lookup(b'T')?]] = 0.5;
+                }
+                b'V' => {
+                    m[[i, DNAMotif::lookup(b'A')?]] = 0.333;
+                    m[[i, DNAMotif::lookup(b'C')?]] = 0.333;
+                    m[[i, DNAMotif::lookup(b'G')?]] = 0.333;
+                }
+                b'H' => {
+                    m[[i, DNAMotif::lookup(b'A')?]] = 0.333;
+                    m[[i, DNAMotif::lookup(b'C')?]] = 0.333;
+                    m[[i, DNAMotif::lookup(b'T')?]] = 0.333;
+                }
+                b'D' => {
+                    m[[i, DNAMotif::lookup(b'A')?]] = 0.333;
+                    m[[i, DNAMotif::lookup(b'T')?]] = 0.333;
+                    m[[i, DNAMotif::lookup(b'G')?]] = 0.333;
+                }
+                b'B' => {
+                    m[[i, DNAMotif::lookup(b'T')?]] = 0.333;
+                    m[[i, DNAMotif::lookup(b'C')?]] = 0.333;
+                    m[[i, DNAMotif::lookup(b'G')?]] = 0.333;
+                }
+                b'N' => {
+                    m[[i, DNAMotif::lookup(b'A')?]] = 0.25;
+                    m[[i, DNAMotif::lookup(b'T')?]] = 0.25;
+                    m[[i, DNAMotif::lookup(b'G')?]] = 0.25;
+                    m[[i, DNAMotif::lookup(b'C')?]] = 0.25;
+                }
+                x => return Err(PSSMError::InvalidMonomer(x)),
+            }
+        }
+        Ok(Box::new(m.into()))
     }
 }
 
