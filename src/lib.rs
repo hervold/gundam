@@ -16,6 +16,8 @@ extern crate serde_derive;
 
 extern crate serde;
 extern crate serde_json;
+use fishers_exact::{fishers_exact, TestTails};
+use std::cmp::{max, min};
 
 use std::ffi::{CStr, CString};
 use std::fmt;
@@ -52,6 +54,28 @@ lazy_static! {
 }
 
 type ScoredSeqs = Vec<(String, f32)>;
+
+/// P-values returned by the Fisher exact test don't change meaningfully as the values get larger.
+/// eg, both [100, 200, 10_000, 10_000] and [1_000, 2_000, 100_000, 100_000] yield a P-value well
+/// below our cutoff.  therefore, we can safely scale the values down if they're above some arbitrary
+/// threshold.
+pub fn scaled_fisher(_ct1: usize, _tot1: usize, _ct2: usize, _tot2: usize) -> f64 {
+    let (ct1, tot1) = if _tot1 as f64 <= 1e4 {
+        (_ct1 as i32, _tot1 as i32)
+    } else {
+        let scale = 1e4 / _tot1 as f64;
+        (max(1, (scale * _ct1 as f64) as i32), 10_000)
+    };
+
+    let (ct2, tot2) = if _tot2 as f64 <= 1e4 {
+        (_ct2 as i32, _tot2 as i32)
+    } else {
+        let scale = 1e4 / _tot2 as f64;
+        (max(1, (scale * _ct2 as f64) as i32), 10_000)
+    };
+
+    fishers_exact(&[ct1, ct2, tot1, tot2], TestTails::One)
+}
 
 /*
 

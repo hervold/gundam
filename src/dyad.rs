@@ -3,9 +3,8 @@ use jobsteal::{make_pool, BorrowSpliterator, IntoSpliterator, Pool, Spliterator}
 use std::cmp::{max, min};
 use std::str;
 use std::{f64, usize};
-//use darwin_rs::select::MaximizeSelector;
-use fishers_exact::{fishers_exact, TestTails};
 
+use bio::alignment::distance::hamming;
 use bio::io::fasta;
 use bio::pattern_matching::pssm::{Motif, PSSMError, ScoredPos};
 use ndarray::prelude::{Array, Array2};
@@ -91,35 +90,6 @@ where
         m
     }
 
-    fn hamming(a: &[u8], b: &[u8]) -> usize {
-        a.iter()
-            .zip(b.iter())
-            .map(|(a, b)| if *a == *b { 1 } else { 0 })
-            .sum()
-    }
-
-    /// P-values returned by the Fisher exact test don't change meaningfully as the values get larger.
-    /// eg, both [100, 200, 10_000, 10_000] and [1_000, 2_000, 100_000, 100_000] yield a P-value well
-    /// below our cutoff.  therefore, we can safely scale the values down if they're above some arbitrary
-    /// threshold.
-    fn scaled_fisher(_ct1: usize, _tot1: usize, _ct2: usize, _tot2: usize) -> f64 {
-        let (ct1, tot1) = if _tot1 as f64 <= 1e4 {
-            (_ct1 as i32, _tot1 as i32)
-        } else {
-            let scale = 1e4 / _tot1 as f64;
-            (max(1, (scale * _ct1 as f64) as i32), 10_000)
-        };
-
-        let (ct2, tot2) = if _tot2 as f64 <= 1e4 {
-            (_ct2 as i32, _tot2 as i32)
-        } else {
-            let scale = 1e4 / _tot2 as f64;
-            (max(1, (scale * _ct2 as f64) as i32), 10_000)
-        };
-
-        fishers_exact(&[ct1, ct2, tot1, tot2], TestTails::One)
-    }
-
     /// generate kmers, tablulate, and apply Fisher exact test
     pub fn passing_kmers(pos_fname: &str, neg_fname: &str) -> Vec<(usize, usize, usize, f64)> {
         let (pos, pos_ct) = DyadMotif::<DNAMotif>::fasta_to_ctr(pos_fname);
@@ -138,7 +108,7 @@ where
                 for j in 0..height {
                     for k in 0..gap {
                         if pos.ctr[[*i, j, k]] > neg.ctr[[*i, j, k]] {
-                            let p = DyadMotif::<DNAMotif>::scaled_fisher(
+                            let p = scaled_fisher(
                                 pos.ctr[[*i, j, k]],
                                 pos_ct,
                                 neg.ctr[[*i, j, k]],
@@ -168,7 +138,11 @@ where
         F: Fn(
             &mut Vec<(&'a [u8], ScoredPos)>,
             &mut Vec<(&'a [u8], ScoredPos)>,
-        ) -> Option<(Vec<(&'a [u8], ScoredPos)>, Vec<(&'a [u8], ScoredPos)>)>,
+        ) -> (
+            Vec<(&'a [u8], ScoredPos)>,
+            usize,
+            Vec<(&'a [u8], ScoredPos)>,
+        ),
     {
         info!("using {} cpus", *CPU_COUNT);
         let mut pool = make_pool(*CPU_COUNT).unwrap();
@@ -203,8 +177,7 @@ where
 
             let mut pos_v = init.eval_seqs(&mut pool, pos);
             let mut neg_v = init.eval_seqs(&mut pool, neg);
-            let (pos_seqs, neg_seqs) =
-                chooser(&mut pos_v, &mut neg_v).expect("motifs found bad one (1)");
+            let (pos_seqs, neg_ct, neg_seqs) = chooser(&mut pos_v, &mut neg_v);
 
             info!(
                 "DyadMotif::motifs - {} / {} seqs used",
@@ -343,7 +316,7 @@ where
                 let (ref b_seq, ScoredPos { ref loc, .. }) = self.pos_seqs[j];
                 let b = &b_seq[*loc..*loc + pwm_len];
 
-                diffs[[i, j]] = Self::hamming(a, b);
+                diffs[[i, j]] = hamming(a, b) as usize;
             }
         }
         let mut best_i = 0;
@@ -555,40 +528,40 @@ where
 pub fn choose<'a>(
     pos_v: &mut Vec<(&'a [u8], ScoredPos)>,
     neg_v: &mut Vec<(&'a [u8], ScoredPos)>,
-) -> Option<(Vec<(&'a [u8], ScoredPos)>, Vec<(&'a [u8], ScoredPos)>)> {
-    pos_v.sort_by(|&(_, ref score_a), &(_, ref score_b)| {
-        score_b.sum.partial_cmp(&score_a.sum).expect("float sort")
-    });
+) -> (
+    Vec<(&'a [u8], ScoredPos)>,
+    usize,
+    Vec<(&'a [u8], ScoredPos)>,
+) {
+    const MIN_SCORE: f32 = 0.9;
+
+    let passing_pos: Vec<(&'a [u8], ScoredPos)> = pos_v
+        .iter()
+        .filter_map(|ref t| {
+            if t.1.sum >= MIN_SCORE {
+                Some(t.clone())
+            } else {
+                None
+            }
+        })
+        .cloned()
+        .collect();
     neg_v.sort_by(|&(_, ref score_a), &(_, ref score_b)| {
         score_b.sum.partial_cmp(&score_a.sum).expect("float sort")
     });
+    let repr_neg = neg_v.iter().take(passing_pos.len()).cloned().collect();
+    let cutoff_neg = match neg_v
+        .iter()
+        .enumerate()
+        .find(|&(_, &(_, ref score))| score.sum <= MIN_SCORE)
+    {
+        Some((i, _)) => i,
+        None => 0,
+    };
 
-    let mut cutoff = 0;
-    for (i, &(_, ref score)) in pos_v.iter().enumerate() {
-        if score.sum <= 0.9 {
-            break;
-        }
-        cutoff = i;
-    }
-    if cutoff == 0 {
-        warn!(
-            "-- bad: pos={:?}/{}, {:?}/{}, neg={:?}/{}, {:?}/{}",
-            str::from_utf8(&pos_v[0].0).unwrap(),
-            pos_v[0].1.sum,
-            str::from_utf8(&pos_v[1].0).unwrap(),
-            pos_v[1].1.sum,
-            str::from_utf8(&neg_v[0].0).unwrap(),
-            neg_v[0].1.sum,
-            str::from_utf8(&neg_v[1].0).unwrap(),
-            neg_v[1].1.sum,
-        );
-        return None;
-    }
-    Some((
-        pos_v.iter().take(cutoff).cloned().collect(),
-        neg_v.iter().take(cutoff).cloned().collect(),
-    ))
+    (passing_pos, cutoff_neg, repr_neg)
 }
+
 /*
 fn crossover_motifs(
     mine: &mut Motif,
@@ -722,6 +695,9 @@ where
     }
 
     fn calculate_fitness(&mut self) -> f64 {
+        // FIXME: we're not using this any more ...
+        return f64::NAN;
+
         // Calculate how good the data values are compared to the perfect solution
 
         let mut pool = make_pool(*CPU_COUNT).unwrap();
@@ -992,7 +968,7 @@ mod tests {
         let mut p = motif.eval_seqs(&mut pool, &pos_seqs);
         let mut n = motif.eval_seqs(&mut pool, &neg_seqs);
         println!("p: {:?}", p.iter().map(|t| t.1.sum).collect::<Vec<f32>>());
-        let (pos_seqs, neg_seqs) = choose(&mut p, &mut n).expect("motifs found bad one (2)");
+        let (pos_seqs, _, neg_seqs) = choose(&mut p, &mut n);
         println!("pos_seqs.len: {}", pos_seqs.len());
     }
 
