@@ -3,7 +3,7 @@ extern crate gundam;
 extern crate log;
 extern crate bio;
 extern crate chrono;
-extern crate darwin_rs;
+//extern crate darwin_rs;
 extern crate env_logger;
 extern crate ndarray;
 
@@ -15,7 +15,7 @@ use bio::alignment::distance::hamming;
 use bio::alphabets::dna::revcomp;
 use bio::pattern_matching::pssm::{DNAMotif, Motif, ScoredPos};
 use chrono::Local;
-use darwin_rs::individual::Individual;
+//use darwin_rs::individual::Individual;
 use env_logger::Builder as LogBuilder;
 use gundam::*;
 use ndarray::prelude::Array2;
@@ -76,13 +76,15 @@ fn main() -> Result<(), Box<Error>> {
             let degen_before = dyad.motif.degenerate_consensus();
             let mean = dyad.refine_mean();
             let degen_after = mean.motif.degenerate_consensus();
-            println!("{},{},{},{:e},{},{}",
-                     idx.0,
-                     idx.1,
-                     idx.2,
-                     idx.3,
-                     str::from_utf8(degen_before.as_ref())?,
-                     str::from_utf8(degen_after.as_ref())?,);
+            println!(
+                "{},{},{},{:e},{},{}",
+                idx.0,
+                idx.1,
+                idx.2,
+                idx.3,
+                str::from_utf8(degen_before.as_ref())?,
+                str::from_utf8(degen_after.as_ref())?,
+            );
         }
     }
 

@@ -1,4 +1,4 @@
-use darwin_rs::{Individual, Population, PopulationBuilder, SimulationBuilder};
+//use darwin_rs::{Individual, Population, PopulationBuilder, SimulationBuilder};
 use jobsteal::{make_pool, BorrowSpliterator, IntoSpliterator, Pool, Spliterator};
 use std::cmp::{max, min};
 use std::str;
@@ -197,7 +197,7 @@ where
                 neg_seqs: neg_seqs,
                 score: f64::NAN,
             };
-            d.calculate_fitness();
+            //d.calculate_fitness();
             dyads.push(d);
         }
         dyads
@@ -264,7 +264,7 @@ where
             score: f64::NAN,
         };
 
-        d.calculate_fitness();
+        //d.calculate_fitness();
         d
     }
 
@@ -296,7 +296,7 @@ where
             score: f64::NAN,
         };
 
-        d.calculate_fitness();
+        //d.calculate_fitness();
         d
     }
 
@@ -384,7 +384,7 @@ where
             neg_seqs: neg.iter().take(cutoff).cloned().collect(),
             score: f64::NAN,
         };
-        d.calculate_fitness();
+        //d.calculate_fitness();
         d
     }
 
@@ -402,7 +402,6 @@ where
 pub trait MatrixPlus<'a> {
     fn eval_seqs(&self, pool: &mut Pool, seqs: &'a Vec<Vec<u8>>) -> Vec<(&'a [u8], ScoredPos)>;
     fn normalize_scores(&mut self);
-    fn from_degen(seq: &[u8]) -> Result<Box<Self>, PSSMError>;
 }
 
 impl<'a> MatrixPlus<'a> for DNAMotif {
@@ -441,69 +440,6 @@ impl<'a> MatrixPlus<'a> for DNAMotif {
                 self.scores[[i, j]] = self.scores[[i, j]] / tot;
             }
         }
-    }
-
-    fn from_degen(seq: &[u8]) -> Result<Box<Self>, PSSMError> {
-        let mut m: Array2<f32> = Array2::from_elem((seq.len(), DNAMotif::MONO_CT), 0.001);
-        for (i, b) in seq.iter().enumerate() {
-            match *b {
-                b'A' | b'T' | b'G' | b'C' => {
-                    m[[i, DNAMotif::lookup(*b)?]] = 1.0;
-                }
-                b'M' => {
-                    m[[i, DNAMotif::lookup(b'A')?]] = 0.5;
-                    m[[i, DNAMotif::lookup(b'C')?]] = 0.5;
-                }
-                b'R' => {
-                    m[[i, DNAMotif::lookup(b'A')?]] = 0.5;
-                    m[[i, DNAMotif::lookup(b'G')?]] = 0.5;
-                }
-                b'W' => {
-                    m[[i, DNAMotif::lookup(b'A')?]] = 0.5;
-                    m[[i, DNAMotif::lookup(b'T')?]] = 0.5;
-                }
-                b'S' => {
-                    m[[i, DNAMotif::lookup(b'C')?]] = 0.5;
-                    m[[i, DNAMotif::lookup(b'G')?]] = 0.5;
-                }
-                b'Y' => {
-                    m[[i, DNAMotif::lookup(b'C')?]] = 0.5;
-                    m[[i, DNAMotif::lookup(b'T')?]] = 0.5;
-                }
-                b'K' => {
-                    m[[i, DNAMotif::lookup(b'G')?]] = 0.5;
-                    m[[i, DNAMotif::lookup(b'T')?]] = 0.5;
-                }
-                b'V' => {
-                    m[[i, DNAMotif::lookup(b'A')?]] = 0.333;
-                    m[[i, DNAMotif::lookup(b'C')?]] = 0.333;
-                    m[[i, DNAMotif::lookup(b'G')?]] = 0.333;
-                }
-                b'H' => {
-                    m[[i, DNAMotif::lookup(b'A')?]] = 0.333;
-                    m[[i, DNAMotif::lookup(b'C')?]] = 0.333;
-                    m[[i, DNAMotif::lookup(b'T')?]] = 0.333;
-                }
-                b'D' => {
-                    m[[i, DNAMotif::lookup(b'A')?]] = 0.333;
-                    m[[i, DNAMotif::lookup(b'T')?]] = 0.333;
-                    m[[i, DNAMotif::lookup(b'G')?]] = 0.333;
-                }
-                b'B' => {
-                    m[[i, DNAMotif::lookup(b'T')?]] = 0.333;
-                    m[[i, DNAMotif::lookup(b'C')?]] = 0.333;
-                    m[[i, DNAMotif::lookup(b'G')?]] = 0.333;
-                }
-                b'N' => {
-                    m[[i, DNAMotif::lookup(b'A')?]] = 0.25;
-                    m[[i, DNAMotif::lookup(b'T')?]] = 0.25;
-                    m[[i, DNAMotif::lookup(b'G')?]] = 0.25;
-                    m[[i, DNAMotif::lookup(b'C')?]] = 0.25;
-                }
-                x => return Err(PSSMError::InvalidMonomer(x)),
-            }
-        }
-        Ok(Box::new(m.into()))
     }
 }
 
@@ -671,7 +607,7 @@ fn crossover_motifs(
 
     Motif::from(new_m)
 }
-*/
+
 
 impl<'a, M> Individual for DyadMotif<'a, M>
 where
@@ -769,6 +705,7 @@ where
         self.clone()
     }*/
 }
+ */
 
 /*
 pub fn find_motifs<'a, 'b>(

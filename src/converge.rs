@@ -7,15 +7,18 @@ extern crate fishers_exact;
 extern crate jobsteal;
 extern crate ndarray;
 extern crate suffix;
-
-use std::collections::HashSet;
-use bio::alphabets::dna::revcomp;
-
+#[macro_use]
+extern crate ergo_std;
 use gundam::*;
-use bio::pattern_matching::pssm::{DNAMotif, Motif};
+
+use bio::alphabets::dna::revcomp;
+use std::collections::HashSet;
+
+use bio::pattern_matching::pssm::{DNAMotif, Motif, PSSMError};
 use env_logger::Builder as LogBuilder;
 use fishers_exact::{fishers_exact, TestTails};
 use gundam::dyad::choose;
+use gundam::*;
 use gundam::*;
 use jobsteal::{make_pool, BorrowSpliterator, IntoSpliterator, Pool, Spliterator};
 use ndarray::prelude::{Array, Array2, AsArray};
@@ -25,8 +28,11 @@ use std::f64;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::process::exit;
-use suffix::SuffixTable;
 use std::str;
+use suffix::SuffixTable;
+
+use kmer_idx::KmerIndex;
+use kmer_idx;
 
 const EPSILON: f32 = 1e-4;
 const DELIMITER: u8 = b'$';
@@ -52,17 +58,19 @@ fn seqs_to_dyad<'a>(
 
     info!("{} / {} seqs", pos_seqs.len(), pos.len());
 
-    (scaled_fisher(pos_seqs.len(), pos_v.len(), neg_ct, neg_v.len()),
+    (
+        scaled_fisher(pos_seqs.len(), pos_v.len(), neg_ct, neg_v.len()),
         DyadMotif {
-        init: init.clone(),
-        history: vec![MotifHistory::Init],
-        motif: init.clone(),
-        kmer_len: 0,
-        gap_len: 0,
-        pos_seqs: pos_seqs,
-        neg_seqs: neg_seqs,
-        score: f64::NAN,
-    })
+            init: init.clone(),
+            history: vec![MotifHistory::Init],
+            motif: init.clone(),
+            kmer_len: 0,
+            gap_len: 0,
+            pos_seqs: pos_seqs,
+            neg_seqs: neg_seqs,
+            score: f64::NAN,
+        },
+    )
 }
 
 // FIXME: make this more generic ...
@@ -87,7 +95,11 @@ fn em_cycle<'a>(
     let (p_val, dyad) = seqs_to_dyad(&mut cpu_pool, init, pos, neg);
     let mean = dyad.refine_mean();
 
-    (dist(&dyad.motif.scores, &mean.motif.scores), p_val, mean.motif)
+    (
+        dist(&dyad.motif.scores, &mean.motif.scores),
+        p_val,
+        mean.motif,
+    )
 }
 
 fn mean_until_stable<'a>(
@@ -104,6 +116,18 @@ fn mean_until_stable<'a>(
         info!("recursing...");
         mean_until_stable(&mut cpu_pool, &motif, pos, neg)
     }
+}
+
+/// returns list of sequence indices matching motif by apply motif to all kmers in index, and filtering by threshhold
+fn kmer_heur( motif: &DNAMotif, threshhold: f32, kmers: &KmerIndex ) -> Result<HashSet<usize>,PSSMError> {
+    let mut all_ids = hashset![];
+    for (kmer, ids) in &kmers.0 {
+        let sp = motif.score(&kmer[..])?;
+        if sp.sum >= threshhold {
+            all_ids.extend( ids.iter() );
+        }
+    }
+    Ok(all_ids)
 }
 
 fn main() -> Result<(), Box<Error>> {
@@ -153,10 +177,29 @@ fn main() -> Result<(), Box<Error>> {
         }
     }
 
+    let pos_idx = KmerIndex::new(&pos);
+    let neg_idx = KmerIndex::new(&neg);
+
     for idx in not_subst_idx {
-        let motif = DNAMotif::from_degen(motif_v[idx].as_ref())?;
+        let motif = DNAMotif::from_degenerate(motif_v[idx].as_ref())?;
+
+
+        let test_all = seqs_to_dyad(&mut pool, &motif, &pos, &neg);
+
+        info!("-- test_all: pos={}, neg={}", test_all.1.pos_seqs.len(), test_all.1.neg_seqs.len());
+
+        let chosen_pos_idx = kmer_heur(&motif, 0.99, &pos_idx)?;
+        let chosen_pos = chosen_pos_idx.iter().map(|i| pos[*i].clone()).collect::<Vec<_>>();
+        let chosen_neg_idx = kmer_heur(&motif, 0.99, &pos_idx)?;
+        let chosen_neg = chosen_neg_idx.iter().map(|i| neg[*i].clone()).collect::<Vec<_>>();
+
+        let test_some = seqs_to_dyad(&mut pool, &motif, &chosen_pos, &chosen_neg);
+
+        info!("-- test_some: pos={}/{}, neg={}/{}", test_some.1.pos_seqs.len(), chosen_pos_idx.len(),
+                 test_some.1.neg_seqs.len(), chosen_neg_idx.len());
+
         let (p_val, dyad_final) = mean_until_stable(&mut pool, &motif, &pos, &neg);
-        println!(
+        info!(
             "{},{},{:e}",
             String::from_utf8(motif.degenerate_consensus())?,
             String::from_utf8(dyad_final.motif.degenerate_consensus())?,

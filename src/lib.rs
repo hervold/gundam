@@ -1,7 +1,7 @@
 #[macro_use(s)]
 extern crate ndarray;
 extern crate bio;
-extern crate darwin_rs;
+//extern crate darwin_rs;
 extern crate jobsteal;
 extern crate rand;
 #[macro_use]
@@ -13,9 +13,13 @@ extern crate num_cpus;
 extern crate lazy_static;
 #[macro_use]
 extern crate serde_derive;
+#[macro_use]
+extern crate ergo_std;
 
 extern crate serde;
 extern crate serde_json;
+use ergo_std::*;
+
 use fishers_exact::{fishers_exact, TestTails};
 use std::cmp::{max, min};
 
@@ -24,7 +28,7 @@ use std::fmt;
 use std::mem;
 use std::os::raw::{c_char, c_void};
 
-use darwin_rs::{Individual, Population, PopulationBuilder, SimulationBuilder};
+//use darwin_rs::{Individual, Population, PopulationBuilder, SimulationBuilder};
 use jobsteal::{make_pool, BorrowSpliteratorMut, Pool, Spliterator};
 use std::f64;
 use std::str;
@@ -40,7 +44,7 @@ use ctr::*;
 
 pub mod dyad;
 pub use dyad::*;
-
+pub mod kmer_idx;
 //pub use dyad::find_motifs;
 
 pub const KMER_LEN: usize = 5;
