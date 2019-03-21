@@ -154,34 +154,44 @@ fn main() -> Result<(), Box<Error>> {
         }
 
         match (|| -> Result<_, Box<Error>> {
-            let motif = DNAMotif::from_degenerate(motif_v[*idx].as_ref())?;
+            let motif_init = DNAMotif::from_degenerate(motif_v[*idx].as_ref())?;
+            let mut motif = motif_init.clone();
+            let mut p_val: f64 = 0.0;
+            let mut final_dyad = DyadMotif::<DNAMotif>::new();
+            loop {
+                let chosen_pos_idx = kmer_heur(&motif, 0.99, &pos_idx)?;
+                let chosen_pos = chosen_pos_idx
+                    .iter()
+                    .map(|i| pos[*i].clone())
+                    .collect::<Vec<_>>();
+                let chosen_neg_idx = kmer_heur(&motif, 0.99, &pos_idx)?;
+                let chosen_neg = chosen_neg_idx
+                    .iter()
+                    .map(|i| neg[*i].clone())
+                    .collect::<Vec<_>>();
 
-            let chosen_pos_idx = kmer_heur(&motif, 0.99, &pos_idx)?;
-            let chosen_pos = chosen_pos_idx
-                .iter()
-                .map(|i| pos[*i].clone())
-                .collect::<Vec<_>>();
-            let chosen_neg_idx = kmer_heur(&motif, 0.99, &pos_idx)?;
-            let chosen_neg = chosen_neg_idx
-                .iter()
-                .map(|i| neg[*i].clone())
-                .collect::<Vec<_>>();
+                let (p_val, mut final_dyad) = mean_until_stable(
+                    &mut pool,
+                    &motif,
+                    &chosen_pos,
+                    pos.len(),
+                    &chosen_neg,
+                    neg.len(),
+                );
 
-            let (p_val, dyad_final) = mean_until_stable(
-                &mut pool,
-                &motif,
-                &chosen_pos,
-                pos.len(),
-                &chosen_neg,
-                neg.len(),
-            );
+                if final_dyad.slide() {
+                    motif = final_dyad.motif.clone();
+                } else {
+                    break;
+                }
+            }
             println!(
                 "{},{},{:e},{},{}",
                 String::from_utf8(motif.degenerate_consensus())?,
-                String::from_utf8(dyad_final.motif.degenerate_consensus())?,
+                String::from_utf8(final_dyad.motif.degenerate_consensus())?,
                 p_val,
-                chosen_pos.len(),
-                dyad_final.pos_seqs.len()
+                pos.len(),
+                final_dyad.pos_seqs.len()
             );
             Ok(())
         })() {

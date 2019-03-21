@@ -61,6 +61,20 @@ impl<'a, M> DyadMotif<'a, M>
 where
     M: 'a + Motif + Clone + Sync + Send + From<Array2<f32>>,
 {
+    pub fn new() -> DyadMotif<'static, DNAMotif> {
+        let m = DNAMotif::from_degenerate(b"A").unwrap();
+        DyadMotif {
+            init: m.clone(),
+            history: vec![],
+            motif: m.clone(),
+            kmer_len: 0,
+            gap_len: 0,
+            pos_seqs: vec![],
+            neg_seqs: vec![],
+            score: 0.0,
+        }
+    }
+
     fn fasta_to_ctr(fname: &str) -> (GappedKmerCtr<M>, usize) {
         let mut ctr = GappedKmerCtr::new(KMER_LEN, MIN_GAP, MAX_GAP);
         let mut tot = 0;
@@ -367,6 +381,91 @@ where
     pub fn show_motif(&self) -> String {
         String::from_utf8(self.motif.degenerate_consensus()).expect("show_motif")
     }
+
+    /// expand or contract a dyad based upon degenerate representation:
+    /// 1. if either 3' or 5' end is N, "cap" it: truncate and add a ContractX entry to the history vec
+    /// 2. if not, lengthen by 1 N, and return for refinement
+    pub fn slide(&mut self) -> bool {
+        if let Some(entry) = self.history.last() {
+            if *entry == MotifHistory::Final {
+                return false;
+            }
+        }
+
+        let left_term = match self
+            .history
+            .iter()
+            .find(|e| **e == MotifHistory::ContractLeft)
+        {
+            Some(_) => true,
+            None => false,
+        };
+        let right_term = match self
+            .history
+            .iter()
+            .find(|e| **e == MotifHistory::ContractRight)
+        {
+            Some(_) => true,
+            None => false,
+        };
+
+        if left_term && right_term {
+            self.history.push(MotifHistory::Final);
+            return false;
+        }
+
+        let mut new_len = self.motif.len();
+        let repr = self.motif.degenerate_consensus();
+        let left_incr = if left_term {
+            0
+        } else if repr[0] == b'N' {
+            self.history.push(MotifHistory::ContractLeft);
+            -1
+        } else {
+            self.history.push(MotifHistory::ExpandLeft);
+            1
+        };
+
+        let right_incr = if right_term {
+            0
+        } else if let Some(b) = repr.last() {
+            if *b == b'N' {
+                self.history.push(MotifHistory::ContractRight);
+                -1
+            } else {
+                self.history.push(MotifHistory::ExpandRight);
+                1
+            }
+        } else {
+            unreachable!();
+        };
+
+        println!("-- new hist: {:?}", &self.history);
+        let mut new_m = Array2::from_elem(
+            (
+                (self.motif.len() as isize + left_incr + right_incr) as usize,
+                DNAMotif::MONO_CT,
+            ),
+            1.0 / DNAMotif::MONO_CT as f32,
+        );
+        let (old_offset, new_offset) = if left_incr == -1 { (1, 0) } else { (0, 1) };
+        let to = if right_incr == -1 {
+            self.motif.len() - 1
+        } else {
+            self.motif.len()
+        } - old_offset;
+        {
+        let scores = self.motif.get_scores();
+        for i in 0..to {
+            for b in (0..DNAMotif::MONO_CT) {
+                new_m[[new_offset + i, b]] = scores[[old_offset + i, b]];
+            }
+        }
+        }
+            self.motif = new_m.into();
+
+        true
+    }
 }
 
 pub trait MatrixPlus<'a> {
@@ -554,90 +653,6 @@ pub fn kmer_heur(
         }
     }
     Ok(all_ids)
-}
-
-/// expand or contract a dyad based upon degenerate representation:
-/// 1. if either 3' or 5' end is N, "cap" it: truncate and add a ContractX entry to the history vec
-/// 2. if not, lengthen by 1 N, and return for refinement
-pub fn slide_dyad<'a>(dyad: &DyadMotif<'a, DNAMotif>) -> Option<DyadMotif<'a, DNAMotif>> {
-    if let Some(entry) = dyad.history.last() {
-        if *entry == MotifHistory::Final {
-            return None;
-        }
-    }
-
-    let left_term = match dyad
-        .history
-        .iter()
-        .find(|e| **e == MotifHistory::ContractLeft)
-    {
-        Some(_) => true,
-        None => false,
-    };
-    let right_term = match dyad
-        .history
-        .iter()
-        .find(|e| **e == MotifHistory::ContractRight)
-    {
-        Some(_) => true,
-        None => false,
-    };
-
-    let mut new_dyad = dyad.clone();
-    if left_term && right_term {
-        new_dyad.history.push(MotifHistory::Final);
-        return Some(new_dyad);
-    }
-
-    let mut new_len = dyad.motif.len();
-    let repr = dyad.motif.degenerate_consensus();
-    let left_incr = if left_term {
-        0
-    } else if repr[0] == b'N' {
-        new_dyad.history.push(MotifHistory::ContractLeft);
-        -1
-    } else {
-        new_dyad.history.push(MotifHistory::ExpandLeft);
-        1
-    };
-
-    let right_incr = if right_term {
-        0
-    } else if let Some(b) = repr.last() {
-        if *b == b'N' {
-            new_dyad.history.push(MotifHistory::ContractRight);
-            -1
-        } else {
-            new_dyad.history.push(MotifHistory::ExpandRight);
-            1
-        }
-    } else {
-        unreachable!();
-    };
-
-    println!("-- new hist: {:?}", &new_dyad.history);
-    let mut new_m = Array2::from_elem(
-        (
-            (dyad.motif.len() as isize + left_incr + right_incr) as usize,
-            DNAMotif::MONO_CT,
-        ),
-        1.0 / DNAMotif::MONO_CT as f32,
-    );
-    let (old_offset, new_offset) = if left_incr == -1 { (1, 0) } else { (0, 1) };
-    let to = if right_incr == -1 {
-        dyad.motif.len() - 1
-    } else {
-        dyad.motif.len()
-    } - old_offset;
-    for i in 0..to {
-        for b in (0..DNAMotif::MONO_CT) {
-            new_m[[new_offset + i, b]] = dyad.motif.scores[[old_offset + i, b]];
-        }
-    }
-    new_dyad.init = dyad.motif.clone();
-    new_dyad.motif = new_m.into();
-
-    Some(new_dyad)
 }
 
 #[cfg(test)]
@@ -831,15 +846,14 @@ mod tests {
             neg_seqs: vec![],
             score: 0.0,
         };
-
-        let d2 = slide_dyad(&d1).unwrap();
+        assert!( d1.slide() );
         println!(
             "-- new degen: {}",
-            str::from_utf8(d2.motif.degenerate_consensus().as_slice()).unwrap()
+            str::from_utf8(d1.motif.degenerate_consensus().as_slice()).unwrap()
         );
-        assert_eq!(d2.motif.degenerate_consensus(), b"AAAAN".to_vec());
+        assert_eq!(d1.motif.degenerate_consensus(), b"AAAAN".to_vec());
         assert_eq!(
-            d2.history,
+            d1.history,
             vec![
                 MotifHistory::Init,
                 MotifHistory::ContractLeft,
@@ -847,18 +861,28 @@ mod tests {
             ]
         );
 
+
         let m2 = DNAMotif::from_degenerate(b"AAAAN").unwrap();
-        d1.motif = m2;
-        let d3 = slide_dyad(&d1).unwrap();
-        assert_eq!(d3.motif.degenerate_consensus(), b"NAAAA".to_vec());
+        let mut d2 = DyadMotif {
+            init: m2.clone(),
+            history: vec![MotifHistory::Init],
+            motif: m2.clone(),
+            kmer_len: 0,
+            gap_len: 0,
+            pos_seqs: vec![],
+            neg_seqs: vec![],
+            score: 0.0,
+        };
+
+        assert!( d2.slide() );
+        assert_eq!(d2.motif.degenerate_consensus(), b"NAAAA".to_vec());
         assert_eq!(
-            d3.history,
+            d2.history,
             vec![
                 MotifHistory::Init,
                 MotifHistory::ExpandLeft,
                 MotifHistory::ContractRight
             ]
         );
-
     }
 }
