@@ -40,11 +40,11 @@ use ndarray::prelude::{Array, Array2, AsArray};
 use rand::Rng;
 
 pub mod ctr;
-use ctr::*;
-
+pub use ctr::*;
 pub mod dyad;
 pub use dyad::*;
 pub mod kmer_idx;
+pub use kmer_idx::KmerIndex;
 //pub use dyad::find_motifs;
 
 pub const KMER_LEN: usize = 5;
@@ -52,6 +52,7 @@ const MIN_GAP: usize = 0;
 const MAX_GAP: usize = 20;
 const MUT_INCR: f32 = 0.2;
 const MIN_SCORE: f32 = 0.9;
+pub const EPSILON: f32 = 1e-4;
 
 lazy_static! {
     pub static ref CPU_COUNT: usize = num_cpus::get();

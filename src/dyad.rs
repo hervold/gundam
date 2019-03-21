@@ -17,7 +17,7 @@ use ctr::*;
 const P_CUTOFF: f64 = 0.001;
 const MODAL_MAX_SEQS: usize = 400;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum MotifHistory {
     Init,
     Mutate,
@@ -25,6 +25,13 @@ pub enum MotifHistory {
     MeanDiff,
     Mode,
     Reset,
+    ExpandLeft,
+    ExpandRight,
+    ExpandBoth,
+    ContractLeft,
+    ContractRight,
+    ContractBoth,
+    Final,
 }
 
 #[derive(Debug, Clone)]
@@ -97,8 +104,11 @@ where
 
         let (width, height, gap) = pos.ctr.dim();
 
+        let cutoff = P_CUTOFF / 2.0_f64.powi(2 * KMER_LEN as i32);
+        info!("-- using cutoff: {:e}", cutoff);
+
         let mut pool = make_pool(*CPU_COUNT).unwrap();
-        info!("passing_kmers - created pool of {} threads", *CPU_COUNT);
+        debug!("-- passing_kmers - created pool of {} threads", *CPU_COUNT);
         let mut indices: Vec<(usize, Vec<(usize, usize, f64)>)> =
             (0..width).map(|i| (i, vec![])).collect();
         indices
@@ -144,13 +154,14 @@ where
             Vec<(&'a [u8], ScoredPos)>,
         ),
     {
-        info!("using {} cpus", *CPU_COUNT);
+        debug!("using {} cpus", *CPU_COUNT);
         let mut pool = make_pool(*CPU_COUNT).unwrap();
         let mut dyads = Vec::new();
         for (idx, &(i, j, k, _)) in chosen.iter().enumerate() {
+            /*
             if idx % 500 == 0 {
                 info!("creating dyad #{} / {}", idx, chosen.len());
-            }
+            }*/
 
             let init: DNAMotif = (DyadMotif::<DNAMotif>::kmers_to_matrix(
                 GappedKmerCtr::<DNAMotif>::int_to_kmer(KMER_LEN, i).as_slice(),
@@ -179,7 +190,7 @@ where
             let mut neg_v = init.eval_seqs(&mut pool, neg);
             let (pos_seqs, neg_ct, neg_seqs) = chooser(&mut pos_v, &mut neg_v);
 
-            info!(
+            debug!(
                 "DyadMotif::motifs - {} / {} seqs used",
                 pos_seqs.len(),
                 pos_v.len()
@@ -203,47 +214,6 @@ where
         dyads
     }
 
-    /// use a genetic algorithm - generate @mut_ct mutants, mutate further, and return the best
-    /*
-    pub fn refine_GA(&self, mut_ct: usize) -> DyadMotif<'a, M> {
-        // make an initial population of 100 copies of the motif
-        let mut init_pop = (0..mut_ct)
-            .map(|_| self.clone())
-            .collect::<Vec<_>>();
-        for ind in init_pop.iter_mut() {
-            ind.mutate();
-            ind.history.push(MotifHistory::Mutate);
-        }
-
-        let means_based = self.clone().refine_mean();
-        init_pop.push(means_based);
-
-        let meansdiv_based = self.clone().refine_meandiv();
-        init_pop.push(meansdiv_based);
-
-        let mode_based = self.clone().refine_via_mode();
-        init_pop.push(mode_based);
-
-        let population1 = PopulationBuilder::<DyadMotif<M>>::new()
-            .initial_population(init_pop.as_slice())
-            .increasing_exp_mutation_rate(1.03)
-            .reset_limit_end(0) // disable resetting
-            .finalize()
-            .expect("PopulationBuilder");
-        let mut sim = SimulationBuilder::<DyadMotif<M>>::new()
-            .iterations(11)
-            .threads(1)
-            .add_population(population1)
-            .finalize()
-            .expect("some problem making builder");
-
-        sim.run();
-        sim.print_fitness();
-        //sim.simulation_result.fittest[0].individual.calculate_fitness();
-
-        sim.simulation_result.fittest[0].individual.clone()
-    }
-     */
     /// simple means-based refinement
     pub fn refine_mean(&self) -> DyadMotif<M> {
         let len = self.motif.len();
@@ -498,249 +468,176 @@ pub fn choose<'a>(
     (passing_pos, cutoff_neg, repr_neg)
 }
 
-/*
-fn crossover_motifs(
-    mine: &mut Motif,
-    theirs: &mut Motif,
-    pos_fname: &str,
-    neg_fname: &str,
-) -> Motif {
-    assert_eq!(mine.len(), theirs.len());
-
-    // store sequences in memory, as IO doesn't play nice w/ parallelism
-    let mut pos_seqs = Vec::new();
-    for _rec in fasta::Reader::from_file(pos_fname)
-        .expect(format!("couldn't open {}", pos_fname).as_str())
-        .records()
-    {
-        let rec = _rec.expect("unwrap record");
-        pos_seqs.push((rec.seq().to_vec(), ScoredPos::default(), ScoredPos::default()));
-    }
-    let mut neg_seqs = Vec::new();
-    for _rec in fasta::Reader::from_file(neg_fname)
-        .expect(format!("couldn't open {}", neg_fname).as_str())
-        .records()
-    {
-        let rec = _rec.expect("unwrap record");
-        neg_seqs.push((rec.seq().to_vec(), ScoredPos::nil(), ScoredPos::nil()));
-    }
-
-    // step one: reduce input to match the width of motif
-    // this necessarily means chosing between the best match position from @mine or @theirs
-    fn max_slice(
-        pwm_len: usize,
-        mine: &Motif,
-        theirs: &Motif,
-        seq: &[u8],
-    ) -> (ScoredPos, ScoredPos) {
-        let s = mine.score(seq).expect(
-            format!("self couldn't score: {:?}", seq)
-                .as_str(),
-        );
-        let o = theirs.score(seq).expect(
-            format!("other couldn't score: {:?}", seq)
-                .as_str(),
-        );
-
-        let t = if s.loc == o.loc {
-            (s, o)
-        } else if o.sum > s.sum {
-            let x = mine.score(&seq[o.loc..o.loc + pwm_len]).expect(
-                "couldn't score slice (1)",
-            );
-            (x, o)
-        } else {
-            let x = theirs.score(&seq[s.loc..s.loc + pwm_len]).expect(
-                "couldn't score slice (2)",
-            );
-            (s, x)
-        };
-
-        t
-    }
-
-    let mut pool = make_pool(*CPU_COUNT).unwrap();
-    let pwm_len = mine.len();
-    pos_seqs.split_iter_mut().for_each(&pool.spawner(), |t| {
-        let scores = max_slice(pwm_len, mine, theirs, t.0.as_slice());
-        t.1 = scores.0;
-        t.2 = scores.1;
-    });
-    neg_seqs.split_iter_mut().for_each(&pool.spawner(), |t| {
-        let scores = max_slice(pwm_len, mine, theirs, t.0.as_slice());
-        t.1 = scores.0;
-        t.2 = scores.1;
-    });
-
-    // step 2: create new PWM by choosing the best base at each position
-    let mut new_m = Array2::zeros((pwm_len, 4));
-    for i in 0..pwm_len {
-        // positive set
-        let mut s_ptally = 0.0;
-        let mut o_ptally = 0.0;
-        for &(_, ref sscore, ref oscore) in pos_seqs.iter() {
-            s_ptally += sscore.scores[i];
-            o_ptally += oscore.scores[i];
-        }
-
-        // negative set
-        let mut s_ntally = 0.0;
-        let mut o_ntally = 0.0;
-        for &(_, ref sscore, ref oscore) in neg_seqs.iter() {
-            s_ntally += sscore.scores[i];
-            o_ntally += oscore.scores[i];
-        }
-        //println!("@ i={}, o > s? {:?}", i, (o_ptally / o_ntally) > (s_ptally / s_ntally));
-        let mut __c: usize = 0;
-        for b in 0..4 {
-            new_m[[i, b]] = if (o_ptally / o_ntally) > (s_ptally / s_ntally) {
-                __c += 1;
-                theirs.scores[[i, b]]
-            } else {
-                mine.scores[[i, b]]
-            }
-        }
-        if __c != 0 && __c != 4 {
-            println!("@@ weird mixed");
-        }
-    }
-
-    Motif::from(new_m)
-}
-
-
-impl<'a, M> Individual for DyadMotif<'a, M>
-where
-    M: Motif + Clone + Sync + Send + From<Array2<f32>>,
-{
-    //const CAN_CROSSOVER: bool = false;
-
-    /// shift value at each position
-    fn mutate(&mut self) {
-        // Mutate the scores
-        let mut scores = self.motif.get_scores().clone();
-        for x in scores.iter_mut() {
-            // r is on (0,1)
-            let r = rand::random::<f32>();
-            // by subtracting 0.5, we allow for negative random numbers
-            // by scaling by 0.02, we limit changes to (-0.01,0.01)
-            let new_x = *x + MUT_INCR * (r - 0.5);
-            *x = if new_x < 0.0 { 0.0 } else { new_x };
-        }
-        self.motif = scores.into();
-    }
-
-    fn calculate_fitness(&mut self) -> f64 {
-        // FIXME: we're not using this any more ...
-        return f64::NAN;
-
-        // Calculate how good the data values are compared to the perfect solution
-
-        let mut pool = make_pool(*CPU_COUNT).unwrap();
-
-        let pos_sum: f64 = self
-            .pos_seqs
-            .clone()
-            .split_iter()
-            .map(|&(ref seq, _)| self.motif.score(seq.iter()).expect("score?").sum as f64)
-            .collect::<Vec<f64>>(&pool.spawner())
-            .iter()
-            .sum();
-
-        let neg_sum: f64 = self
-            .neg_seqs
-            .clone()
-            .split_iter()
-            .map(|&(ref seq, _)| self.motif.score(seq.iter()).expect("score?").sum as f64)
-            .collect::<Vec<f64>>(&pool.spawner())
-            .iter()
-            .sum();
-
-        let score = if pos_sum == 0.0 {
-            f64::INFINITY
-        } else if neg_sum == 0.0 {
-            0.0
-        } else {
-            if self.pos_seqs.len() == self.neg_seqs.len() {
-                neg_sum / pos_sum
-            } else {
-                let pos: f64 = pos_sum / self.pos_seqs.len() as f64;
-                let neg: f64 = neg_sum / self.neg_seqs.len() as f64;
-
-                neg / pos
-            }
-        };
-        self.score = score;
-        score
-    }
-
-    /// initialize array with random values, then normalize
-    /// so each position sums to 1.0
-    fn reset(&mut self) {
-        println!("-- reset");
-        // bases == 4
-        self.motif = self.init.clone();
-        self.history.push(MotifHistory::Reset);
-        self.score = f64::NAN;
-    }
-
-    /* FIXME: switched from crossover fork to regular darwin-rs
-
-    fn crossover(&mut self, other: &mut Self) -> Self {
-        info!("DyadMotif::crossover");
-        let new_motif = crossover_motifs(
-            &mut self.motif,
-            &mut other.motif,
-            self.pos_fname,
-            self.neg_fname,
-        );
-
-        DyadMotif {
-            init: self.motif.clone(),
-            motif: new_motif,
-            ctr: self.ctr.clone(),
-            pos_fname: self.pos_fname,
-            neg_fname: self.neg_fname,
-        }
-        self.clone()
-    }*/
-}
- */
-
-/*
-pub fn find_motifs<'a, 'b>(
-    chosen: Vec<(usize, usize, usize, f64)>,
-    pos: &'a Vec<Vec<u8>>,
-    neg: &'b  Vec<Vec<u8>>
-) -> Vec<DyadMotif<'a, 'b, DNAMotif>> {
-    let mut pool = make_pool(*CPU_COUNT).unwrap();
-    let motifs = DyadMotif::<DNAMotif>::motifs(chosen, pos, neg, choose);
-    motifs
-        .iter()
-        .map(|ref dyad| {
-            // dyad wraps the sequences chosen by our method
-            let mut new_dyad = dyad.refine(100);
-
-            // now that the GA has [hopefully] improved our PWM, we need to choose new seqs
-            let mut pos_v = new_dyad.motif.eval_seqs(&mut pool, pos);
-            let mut neg_v = new_dyad.motif.eval_seqs(&mut pool, neg);
-            let (pos_seqs, neg_seqs) =
-                choose(&mut pos_v, &mut neg_v).expect("motifs found bad one (2)");
-            new_dyad.pos_seqs = pos_seqs;
-            new_dyad.neg_seqs = neg_seqs;
-
-            new_dyad.refine(100)
-        })
-        .collect()
-}
- */
-
 pub fn read_seqs(fname: &str) -> Vec<Vec<u8>> {
     fasta::Reader::from_file(fname)
         .expect(format!("couldn't open {}", fname).as_str())
         .records()
         .map(|_rec| _rec.expect("unwrap record").seq().to_vec())
         .collect()
+}
+
+/// given motif, choose matching sequences and generate new motif representing mean
+pub fn seqs_to_dyad<'a>(
+    mut cpu_pool: &mut Pool,
+    init: &DNAMotif,
+    pos: &'a Vec<Vec<u8>>,
+    pos_ct: usize,
+    neg: &'a Vec<Vec<u8>>,
+    neg_ct: usize,
+) -> (f64, DyadMotif<'a, DNAMotif>) {
+    let mut pos_v = init.eval_seqs(cpu_pool, pos);
+    let mut neg_v = init.eval_seqs(cpu_pool, neg);
+    let (pos_seqs, neg_ct, neg_seqs) = choose(&mut pos_v, &mut neg_v);
+
+    (
+        scaled_fisher(pos_v.len(), pos_ct, neg_v.len(), neg_ct),
+        DyadMotif {
+            init: init.clone(),
+            history: vec![MotifHistory::Init],
+            motif: init.clone(),
+            kmer_len: 0,
+            gap_len: 0,
+            pos_seqs: pos_seqs,
+            neg_seqs: neg_seqs,
+            score: f64::NAN,
+        },
+    )
+}
+
+// apply motif to find sequences; take mean; return new dyad + distance calculation
+pub fn em_cycle<'a>(
+    mut cpu_pool: &mut Pool,
+    init: &DNAMotif,
+    pos: &'a Vec<Vec<u8>>,
+    pos_ct: usize,
+    neg: &'a Vec<Vec<u8>>,
+    neg_ct: usize,
+) -> (f32, f64, DNAMotif) {
+    let (p_val, dyad) = seqs_to_dyad(&mut cpu_pool, init, pos, pos_ct, neg, neg_ct);
+    let mean = dyad.refine_mean();
+
+    (
+        dyad.motif.distance(&mean.motif).expect("distance calc"),
+        p_val,
+        mean.motif,
+    )
+}
+
+///
+pub fn mean_until_stable<'a>(
+    mut cpu_pool: &mut Pool,
+    init: &DNAMotif,
+    pos: &'a Vec<Vec<u8>>,
+    pos_ct: usize,
+    neg: &'a Vec<Vec<u8>>,
+    neg_ct: usize,
+) -> (f64, DyadMotif<'a, DNAMotif>) {
+    let (dist, p_val, motif) = em_cycle(&mut cpu_pool, init, pos, pos_ct, neg, neg_ct);
+    if dist < EPSILON {
+        seqs_to_dyad(&mut cpu_pool, &motif, pos, pos_ct, neg, neg_ct)
+    } else {
+        mean_until_stable(&mut cpu_pool, &motif, pos, pos_ct, neg, neg_ct)
+    }
+}
+
+/// returns list of sequence indices matching motif by apply motif to all kmers in index, and filtering by threshhold
+pub fn kmer_heur(
+    motif: &DNAMotif,
+    threshhold: f32,
+    kmers: &KmerIndex,
+) -> Result<HashSet<usize>, PSSMError> {
+    let mut all_ids = hashset![];
+    for (kmer, ids) in &kmers.0 {
+        let sp = motif.score(&kmer[..])?;
+        if sp.sum >= threshhold {
+            all_ids.extend(ids.iter());
+        }
+    }
+    Ok(all_ids)
+}
+
+/// expand or contract a dyad based upon degenerate representation:
+/// 1. if either 3' or 5' end is N, "cap" it: truncate and add a ContractX entry to the history vec
+/// 2. if not, lengthen by 1 N, and return for refinement
+pub fn slide_dyad<'a>(dyad: &DyadMotif<'a, DNAMotif>) -> Option<DyadMotif<'a, DNAMotif>> {
+    if let Some(entry) = dyad.history.last() {
+        if *entry == MotifHistory::Final {
+            return None;
+        }
+    }
+
+    let left_term = match dyad
+        .history
+        .iter()
+        .find(|e| **e == MotifHistory::ContractLeft)
+    {
+        Some(_) => true,
+        None => false,
+    };
+    let right_term = match dyad
+        .history
+        .iter()
+        .find(|e| **e == MotifHistory::ContractRight)
+    {
+        Some(_) => true,
+        None => false,
+    };
+
+    let mut new_dyad = dyad.clone();
+    if left_term && right_term {
+        new_dyad.history.push(MotifHistory::Final);
+        return Some(new_dyad);
+    }
+
+    let mut new_len = dyad.motif.len();
+    let repr = dyad.motif.degenerate_consensus();
+    let left_incr = if left_term {
+        0
+    } else if repr[0] == b'N' {
+        new_dyad.history.push(MotifHistory::ContractLeft);
+        -1
+    } else {
+        new_dyad.history.push(MotifHistory::ExpandLeft);
+        1
+    };
+
+    let right_incr = if right_term {
+        0
+    } else if let Some(b) = repr.last() {
+        if *b == b'N' {
+            new_dyad.history.push(MotifHistory::ContractRight);
+            -1
+        } else {
+            new_dyad.history.push(MotifHistory::ExpandRight);
+            1
+        }
+    } else {
+        unreachable!();
+    };
+
+    println!("-- new hist: {:?}", &new_dyad.history);
+    let mut new_m = Array2::from_elem(
+        (
+            (dyad.motif.len() as isize + left_incr + right_incr) as usize,
+            DNAMotif::MONO_CT,
+        ),
+        1.0 / DNAMotif::MONO_CT as f32,
+    );
+    let (old_offset, new_offset) = if left_incr == -1 { (1, 0) } else { (0, 1) };
+    let to = if right_incr == -1 {
+        dyad.motif.len() - 1
+    } else {
+        dyad.motif.len()
+    } - old_offset;
+    for i in 0..to {
+        for b in (0..DNAMotif::MONO_CT) {
+            new_m[[new_offset + i, b]] = dyad.motif.scores[[old_offset + i, b]];
+        }
+    }
+    new_dyad.init = dyad.motif.clone();
+    new_dyad.motif = new_m.into();
+
+    Some(new_dyad)
 }
 
 #[cfg(test)]
@@ -919,5 +816,49 @@ mod tests {
                 GappedKmerCtr::<DNAMotif>::kmer_to_int(&MOTIF[i..i + KMER_LEN])
             );
         }
+    }
+
+    #[test]
+    fn test_slide() {
+        let m1 = DNAMotif::from_degenerate(b"NAAAA").unwrap();
+        let mut d1 = DyadMotif {
+            init: m1.clone(),
+            history: vec![MotifHistory::Init],
+            motif: m1.clone(),
+            kmer_len: 0,
+            gap_len: 0,
+            pos_seqs: vec![],
+            neg_seqs: vec![],
+            score: 0.0,
+        };
+
+        let d2 = slide_dyad(&d1).unwrap();
+        println!(
+            "-- new degen: {}",
+            str::from_utf8(d2.motif.degenerate_consensus().as_slice()).unwrap()
+        );
+        assert_eq!(d2.motif.degenerate_consensus(), b"AAAAN".to_vec());
+        assert_eq!(
+            d2.history,
+            vec![
+                MotifHistory::Init,
+                MotifHistory::ContractLeft,
+                MotifHistory::ExpandRight
+            ]
+        );
+
+        let m2 = DNAMotif::from_degenerate(b"AAAAN").unwrap();
+        d1.motif = m2;
+        let d3 = slide_dyad(&d1).unwrap();
+        assert_eq!(d3.motif.degenerate_consensus(), b"NAAAA".to_vec());
+        assert_eq!(
+            d3.history,
+            vec![
+                MotifHistory::Init,
+                MotifHistory::ExpandLeft,
+                MotifHistory::ContractRight
+            ]
+        );
+
     }
 }
