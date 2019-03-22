@@ -53,6 +53,8 @@ where
     pub pos_seqs: Vec<(&'a [u8], ScoredPos)>,
     /// sequences representing background
     pub neg_seqs: Vec<(&'a [u8], ScoredPos)>,
+    /// number of passing negative sequences
+    pub neg_seq_ct: usize,
     /// score - sum(neg) / sum(pos)
     pub score: f64,
 }
@@ -71,6 +73,7 @@ where
             gap_len: 0,
             pos_seqs: vec![],
             neg_seqs: vec![],
+            neg_seq_ct: 0,
             score: 0.0,
         }
     }
@@ -220,6 +223,7 @@ where
                 gap_len: MIN_GAP + k,
                 pos_seqs: pos_seqs,
                 neg_seqs: neg_seqs,
+                neg_seq_ct: neg_ct,
                 score: f64::NAN,
             };
             //d.calculate_fitness();
@@ -245,6 +249,7 @@ where
             gap_len: self.gap_len,
             pos_seqs: self.pos_seqs.to_vec(),
             neg_seqs: self.neg_seqs.to_vec(),
+            neg_seq_ct: self.neg_seq_ct,
             score: f64::NAN,
         };
 
@@ -277,6 +282,7 @@ where
             gap_len: self.gap_len,
             pos_seqs: self.pos_seqs.to_vec(),
             neg_seqs: self.neg_seqs.to_vec(),
+            neg_seq_ct: self.neg_seq_ct,
             score: f64::NAN,
         };
 
@@ -323,8 +329,6 @@ where
             m[[i, M::lookup(*b).expect("refine_via_mode")]] += 0.5;
         }
         let motif: M = m.into();
-        //motif.normalize_scores();
-        //motif.calc_minmax();
         info!(
             "mode: {:?}",
             String::from_utf8(motif.degenerate_consensus()).unwrap()
@@ -366,6 +370,7 @@ where
             gap_len: self.gap_len,
             pos_seqs: pos.iter().take(cutoff).cloned().collect(),
             neg_seqs: neg.iter().take(cutoff).cloned().collect(),
+            neg_seq_ct: self.neg_seq_ct,
             score: f64::NAN,
         };
         //d.calculate_fitness();
@@ -440,7 +445,6 @@ where
             unreachable!();
         };
 
-        println!("-- new hist: {:?}", &self.history);
         let mut new_m = Array2::from_elem(
             (
                 (self.motif.len() as isize + left_incr + right_incr) as usize,
@@ -448,21 +452,22 @@ where
             ),
             1.0 / DNAMotif::MONO_CT as f32,
         );
-        let (old_offset, new_offset) = if left_incr == -1 { (1, 0) } else { (0, 1) };
+        let old_offset = if left_incr == -1 { 1 } else { 0 };
+        let new_offset = if left_incr == 1 { 1 } else { 0 };
         let to = if right_incr == -1 {
             self.motif.len() - 1
         } else {
             self.motif.len()
         } - old_offset;
         {
-        let scores = self.motif.get_scores();
-        for i in 0..to {
-            for b in (0..DNAMotif::MONO_CT) {
-                new_m[[new_offset + i, b]] = scores[[old_offset + i, b]];
+            let scores = self.motif.get_scores();
+            for i in 0..to {
+                for b in (0..DNAMotif::MONO_CT) {
+                    new_m[[new_offset + i, b]] = scores[[old_offset + i, b]];
+                }
             }
         }
-        }
-            self.motif = new_m.into();
+        self.motif = new_m.into();
 
         true
     }
@@ -598,6 +603,7 @@ pub fn seqs_to_dyad<'a>(
             gap_len: 0,
             pos_seqs: pos_seqs,
             neg_seqs: neg_seqs,
+            neg_seq_ct: neg_ct,
             score: f64::NAN,
         },
     )
@@ -844,9 +850,10 @@ mod tests {
             gap_len: 0,
             pos_seqs: vec![],
             neg_seqs: vec![],
+            neg_seq_ct: 0,
             score: 0.0,
         };
-        assert!( d1.slide() );
+        assert!(d1.slide());
         println!(
             "-- new degen: {}",
             str::from_utf8(d1.motif.degenerate_consensus().as_slice()).unwrap()
@@ -861,7 +868,6 @@ mod tests {
             ]
         );
 
-
         let m2 = DNAMotif::from_degenerate(b"AAAAN").unwrap();
         let mut d2 = DyadMotif {
             init: m2.clone(),
@@ -871,10 +877,11 @@ mod tests {
             gap_len: 0,
             pos_seqs: vec![],
             neg_seqs: vec![],
+            neg_seq_ct: 0,
             score: 0.0,
         };
 
-        assert!( d2.slide() );
+        assert!(d2.slide());
         assert_eq!(d2.motif.degenerate_consensus(), b"NAAAA".to_vec());
         assert_eq!(
             d2.history,

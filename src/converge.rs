@@ -97,31 +97,34 @@ fn main() -> Result<(), Box<Error>> {
         ))
         .into();
 
-        let chosen_pos_idx = kmer_heur(&init, 0.99, &pos_idx)?;
-        let chosen_pos = chosen_pos_idx
-            .iter()
-            .map(|i| pos[*i].clone())
-            .collect::<Vec<_>>();
-        let chosen_neg_idx = kmer_heur(&init, 0.99, &pos_idx)?;
-        let chosen_neg = chosen_neg_idx
-            .iter()
-            .map(|i| neg[*i].clone())
-            .collect::<Vec<_>>();
+        let x: Result<(), Box<Error>> = (|| {
+            let chosen_pos_idx = kmer_heur(&init, 0.99, &pos_idx)?;
+            let chosen_pos = chosen_pos_idx
+                .iter()
+                .map(|i| pos[*i].clone())
+                .collect::<Vec<_>>();
+            let chosen_neg_idx = kmer_heur(&init, 0.99, &pos_idx)?;
+            let chosen_neg = chosen_neg_idx
+                .iter()
+                .map(|i| neg[*i].clone())
+                .collect::<Vec<_>>();
 
-        let (p_val, dyad) = seqs_to_dyad(
-            &mut pool,
-            &init,
-            &chosen_pos,
-            pos.len(),
-            &chosen_neg,
-            neg.len(),
-        );
+            let (p_val, dyad) = seqs_to_dyad(
+                &mut pool,
+                &init,
+                &chosen_pos,
+                pos.len(),
+                &chosen_neg,
+                neg.len(),
+            );
 
-        let degen_before = dyad.motif.degenerate_consensus();
-        let mean = dyad.refine_mean();
-        let degen_after = mean.motif.degenerate_consensus();
+            let degen_before = dyad.motif.degenerate_consensus();
+            let mean = dyad.refine_mean();
+            let degen_after = mean.motif.degenerate_consensus();
 
-        uniq.insert(degen_after);
+            uniq.insert(degen_after);
+            Ok(())
+        })();
     }
     info!("-- finished creating {} mean-motifs", uniq.len());
 
@@ -148,29 +151,33 @@ fn main() -> Result<(), Box<Error>> {
 
     info!("-- after suffix tree, {} left", not_subst_idx.len());
 
+    //let vals = vec![];
+    let mut uniq: HashSet<Vec<u8>> = HashSet::new();
     for (num, idx) in not_subst_idx.iter().enumerate() {
-        if num % 200 == 0 {
+        if num % 50 == 0 {
             info!("motif #{} / {}", num, not_subst_idx.len());
         }
+        let motif_init = DNAMotif::from_degenerate(motif_v[*idx].as_ref())?;
+        let mut final_pval: f64 = 0.0;
+        let mut final_cts = (0, 0);
+        let mut final_degen = vec![];
 
-        match (|| -> Result<_, Box<Error>> {
-            let motif_init = DNAMotif::from_degenerate(motif_v[*idx].as_ref())?;
+        match (|| -> Result<(), Box<Error>> {
+            let mut chosen_pos = vec![];
+            let mut chosen_neg = vec![];
             let mut motif = motif_init.clone();
             let mut p_val: f64 = 0.0;
-            let mut final_dyad = DyadMotif::<DNAMotif>::new();
-            loop {
-                let chosen_pos_idx = kmer_heur(&motif, 0.99, &pos_idx)?;
-                let chosen_pos = chosen_pos_idx
-                    .iter()
-                    .map(|i| pos[*i].clone())
-                    .collect::<Vec<_>>();
-                let chosen_neg_idx = kmer_heur(&motif, 0.99, &pos_idx)?;
-                let chosen_neg = chosen_neg_idx
-                    .iter()
-                    .map(|i| neg[*i].clone())
-                    .collect::<Vec<_>>();
+            let mut hist = vec![];
 
-                let (p_val, mut final_dyad) = mean_until_stable(
+            loop {
+                let mut final_dyad = DyadMotif::<DNAMotif>::new();
+
+                let chosen_pos_idx = kmer_heur(&motif, 0.99, &pos_idx)?;
+                chosen_pos = chosen_pos_idx.iter().map(|i| pos[*i].clone()).collect();
+                let chosen_neg_idx = kmer_heur(&motif, 0.99, &pos_idx)?;
+                chosen_neg = chosen_neg_idx.iter().map(|i| neg[*i].clone()).collect();
+
+                let t = mean_until_stable(
                     &mut pool,
                     &motif,
                     &chosen_pos,
@@ -178,25 +185,51 @@ fn main() -> Result<(), Box<Error>> {
                     &chosen_neg,
                     neg.len(),
                 );
+                p_val = t.0;
+                final_dyad = t.1;
+                final_dyad.history = hist;
 
                 if final_dyad.slide() {
                     motif = final_dyad.motif.clone();
+                    hist = final_dyad.history.clone();
                 } else {
+                    final_pval = p_val;
+                    final_degen = final_dyad.motif.degenerate_consensus();
+                    final_cts = (final_dyad.pos_seqs.len(), final_dyad.neg_seq_ct);
                     break;
                 }
             }
-            println!(
-                "{},{},{:e},{},{}",
-                String::from_utf8(motif.degenerate_consensus())?,
-                String::from_utf8(final_dyad.motif.degenerate_consensus())?,
-                p_val,
-                pos.len(),
-                final_dyad.pos_seqs.len()
-            );
+
             Ok(())
         })() {
-            Ok(_) => (),
-            Err(_) => println!("{},,-1,-1", str::from_utf8(motif_v[*idx].as_ref())?),
+            Ok(()) => (),
+            Err(_) => {
+                final_pval = -1.0;
+            }
+        }
+        /*
+        vals.push((
+            motif_init.degenerate_consensus(),
+            final_degen,
+            final_pval,
+            final_cts.0,
+            pos.len(),
+            final_cts.1,
+            neg.len(),
+        ));*/
+
+        if !uniq.contains(final_degen.as_slice()) {
+            println!(
+                "{},{},{:e},{},{},{},{}",
+                String::from_utf8(motif_init.degenerate_consensus())?,
+                str::from_utf8(final_degen.as_slice())?,
+                final_pval,
+                final_cts.0,
+                pos.len(),
+                final_cts.1,
+                neg.len(),
+            );
+            uniq.insert(final_degen);
         }
     }
 
