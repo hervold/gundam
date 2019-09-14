@@ -48,3 +48,5 @@ So many things ...
 
 - output actual PSSMs instead of degenerate sequence representation
 - longer gaps will likely require crossing-over in the GA, which isn't supported by `darwin-rs`.  I have a fix in the works.
+- replace fixed cutoff score with linear model: cutoff = -0.0416887 * information_content + 0.990597
+  (see Figure_1-rnd_seq_score.png - heat map with mean score regression as red line, and 2*std-dev as yellow line)
