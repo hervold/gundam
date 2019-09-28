@@ -1,15 +1,15 @@
 //use darwin_rs::{Individual, Population, PopulationBuilder, SimulationBuilder};
-use jobsteal::{make_pool, BorrowSpliterator, IntoSpliterator, Pool, Spliterator};
-use std::cmp::{max, min};
-use std::str;
-use std::{f64, usize};
-
 use bio::alignment::distance::hamming;
 use bio::io::fasta;
 use bio::pattern_matching::pssm::{Motif, PSSMError, ScoredPos};
+use jobsteal::{make_pool, BorrowSpliterator, IntoSpliterator, Pool, Spliterator};
 use ndarray::prelude::{Array, Array2};
 use rand;
 use rand::Rng;
+use std::cmp::{max, min};
+use std::ops::Range;
+use std::str;
+use std::{f64, usize};
 
 use super::*;
 use ctr::*;
@@ -163,6 +163,7 @@ where
     ) -> Vec<DyadMotif<'a, DNAMotif>>
     where
         F: Fn(
+            f32,
             &mut Vec<(&'a [u8], ScoredPos)>,
             &mut Vec<(&'a [u8], ScoredPos)>,
         ) -> (
@@ -187,6 +188,7 @@ where
             ))
             .into();
 
+            // drop invalid motifs
             if init.min_score == init.max_score {
                 debug!(
                     "skipping motif: {}",
@@ -205,7 +207,8 @@ where
 
             let mut pos_v = init.eval_seqs(&mut pool, pos);
             let mut neg_v = init.eval_seqs(&mut pool, neg);
-            let (pos_seqs, neg_ct, neg_seqs) = chooser(&mut pos_v, &mut neg_v);
+            let (pos_seqs, neg_ct, neg_seqs) =
+                chooser(passing_threshold(&init), &mut pos_v, &mut neg_v);
 
             debug!(
                 "DyadMotif::motifs - {} / {} seqs used",
@@ -535,7 +538,11 @@ where
 }
 
 /// choose samples for EM
+/// filter "pos" seqs by a threshold, collecting passing seqs into Vec passing_pos
+/// sort "negs" seqs by score and (1) return an equal-len Vec (repr_neg) of the highest scoring "neg" seqs, and
+///   find the position of the first failing seq (cutoff_neg)
 pub fn choose<'a>(
+    threshold: f32,
     pos_v: &mut Vec<(&'a [u8], ScoredPos)>,
     neg_v: &mut Vec<(&'a [u8], ScoredPos)>,
 ) -> (
@@ -543,12 +550,10 @@ pub fn choose<'a>(
     usize,
     Vec<(&'a [u8], ScoredPos)>,
 ) {
-    const MIN_SCORE: f32 = 0.9;
-
     let passing_pos: Vec<(&'a [u8], ScoredPos)> = pos_v
         .iter()
         .filter_map(|ref t| {
-            if t.1.sum >= MIN_SCORE {
+            if t.1.sum >= threshold {
                 Some(t.clone())
             } else {
                 None
@@ -563,7 +568,7 @@ pub fn choose<'a>(
     let cutoff_neg = match neg_v
         .iter()
         .enumerate()
-        .find(|&(_, &(_, ref score))| score.sum <= MIN_SCORE)
+        .find(|&(_, &(_, ref score))| score.sum <= threshold)
     {
         Some((i, _)) => i,
         None => 0,
@@ -580,7 +585,7 @@ pub fn read_seqs(fname: &str) -> Vec<Vec<u8>> {
         .collect()
 }
 
-/// given motif, choose matching sequences and generate new motif representing mean
+/// given motif, choose matching sequences.  resulting dyad has two copies of the motif (init and motif)
 pub fn seqs_to_dyad<'a>(
     mut cpu_pool: &mut Pool,
     init: &DNAMotif,
@@ -588,13 +593,15 @@ pub fn seqs_to_dyad<'a>(
     pos_ct: usize,
     neg: &'a Vec<Vec<u8>>,
     neg_ct: usize,
+    threshold: Option<f32>,
 ) -> (f64, DyadMotif<'a, DNAMotif>) {
     let mut pos_v = init.eval_seqs(cpu_pool, pos);
     let mut neg_v = init.eval_seqs(cpu_pool, neg);
-    let (pos_seqs, neg_ct, neg_seqs) = choose(&mut pos_v, &mut neg_v);
 
+    let thresh = threshold.unwrap_or_else(|| passing_threshold(init));
+    let (pos_seqs, neg_hits, neg_seqs) = choose(thresh, &mut pos_v, &mut neg_v);
     (
-        scaled_fisher(pos_v.len(), pos_ct, neg_v.len(), neg_ct),
+        scaled_fisher(pos_v.len(), pos_ct, neg_hits, neg_ct),
         DyadMotif {
             init: init.clone(),
             history: vec![MotifHistory::Init],
@@ -617,8 +624,23 @@ pub fn em_cycle<'a>(
     pos_ct: usize,
     neg: &'a Vec<Vec<u8>>,
     neg_ct: usize,
+    threshold: f32,
 ) -> (f32, f64, DNAMotif) {
-    let (p_val, dyad) = seqs_to_dyad(&mut cpu_pool, init, pos, pos_ct, neg, neg_ct);
+    let (p_val, dyad) = seqs_to_dyad(
+        &mut cpu_pool,
+        init,
+        pos,
+        pos_ct,
+        neg,
+        neg_ct,
+        Some(threshold),
+    );
+    info!(
+        "~~ seqs_to_dyad -> info_content={}, pos_seqs={}, threshold={}",
+        dyad.motif.info_content(),
+        dyad.pos_seqs.len(),
+        threshold
+    );
     let mean = dyad.refine_mean();
 
     (
@@ -628,7 +650,11 @@ pub fn em_cycle<'a>(
     )
 }
 
-///
+/// Expectation maximization (EM) algorithm which (1) finds reads matching above some threshold,
+/// then (2) uses them to construct a new motif by tallying their bases.
+/// Returns when another round of the EM produces the same motif.
+/// Sequence counts are explcitely passed in order to support indexing, ie, passing in a subset
+/// of sequences.
 pub fn mean_until_stable<'a>(
     mut cpu_pool: &mut Pool,
     init: &DNAMotif,
@@ -636,26 +662,59 @@ pub fn mean_until_stable<'a>(
     pos_ct: usize,
     neg: &'a Vec<Vec<u8>>,
     neg_ct: usize,
+    threshold: f32,
 ) -> (f64, DyadMotif<'a, DNAMotif>) {
-    let (dist, p_val, motif) = em_cycle(&mut cpu_pool, init, pos, pos_ct, neg, neg_ct);
+    let (dist, p_val, motif) = em_cycle(&mut cpu_pool, init, pos, pos_ct, neg, neg_ct, threshold);
+    info!("mean_until_stable: dist={}, EPISOLON={}", dist, EPSILON);
     if dist < EPSILON {
-        seqs_to_dyad(&mut cpu_pool, &motif, pos, pos_ct, neg, neg_ct)
+        info!("~~ found thing");
+        seqs_to_dyad(
+            &mut cpu_pool,
+            &motif,
+            pos,
+            pos_ct,
+            neg,
+            neg_ct,
+            Some(threshold),
+        )
     } else {
-        mean_until_stable(&mut cpu_pool, &motif, pos, pos_ct, neg, neg_ct)
+        mean_until_stable(&mut cpu_pool, &motif, pos, pos_ct, neg, neg_ct, threshold)
     }
+}
+
+/// given a motif, calculate the passing threshold based on a simple function of information content
+/// see README for more info
+pub fn passing_threshold(motif: &DNAMotif) -> f32 {
+    72.54231453 / (motif.info_content() + 75.48262684)
 }
 
 /// returns list of sequence indices matching motif by apply motif to all kmers in index, and filtering by threshhold
 pub fn kmer_heur(
     motif: &DNAMotif,
-    threshhold: f32,
     kmers: &KmerIndex,
+    exclude: Option<&Range<usize>>,
 ) -> Result<HashSet<usize>, PSSMError> {
+    let threshold: f32 = passing_threshold(motif);
+
     let mut all_ids = hashset![];
     for (kmer, ids) in &kmers.0 {
-        let sp = motif.score(&kmer[..])?;
-        if sp.sum >= threshhold {
-            all_ids.extend(ids.iter());
+        match motif.score(&kmer[..]) {
+            Err(PSSMError::NullMotif) => {
+                // ignore degenerate edge-cases
+            }
+            Err(e) => return Err(e),
+            Ok(sp) => {
+                // ignore matches overlapping with excluded range
+                if let Some(r) = exclude {
+                    if r.contains(&sp.loc) || r.contains(&(sp.loc + sp.scores.len())) {
+                        continue;
+                    }
+                }
+
+                if sp.sum >= threshold {
+                    all_ids.extend(ids.iter());
+                }
+            }
         }
     }
     Ok(all_ids)

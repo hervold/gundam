@@ -50,3 +50,33 @@ So many things ...
 - longer gaps will likely require crossing-over in the GA, which isn't supported by `darwin-rs`.  I have a fix in the works.
 - replace fixed cutoff score with linear model: cutoff = -0.0416887 * information_content + 0.990597
   (see Figure_1-rnd_seq_score.png - heat map with mean score regression as red line, and 2*std-dev as yellow line)
+
+
+
+===
+
+new scheme:
+ - "degenerate" representation is canonical
+ - 10-fold cross-validation:
+    split sequences into 10
+    motifs are generated from 9/10 and _evaluated_ on the remaining 1/10
+    toss motif / eval-pval into data structure: degen -> [pvals of test sets]
+    final judgement on average of pvals - constrain on freq of occurance?  need to see it 10x?
+
+===
+
+# PIPELINE
+
+./target/release/gundam_kmer train_pos.fa train_neg.fa > 2019sept19.1
+>> 27m50.603s
+
+time ./target/release/gundam 2019sept19.1 train_pos.fa train_neg.fa  > 2019sept19.2
+
+==
+
+RUST_LOG=info ./target/release/gundam_kmer_to_degen fake_kmers.txt fake_pos.fa fake_neg.fa > fake_degen.txt
+1h20m
+
+
+==
+no kmers; too many allocs (input size: 3) - 971.58user 304.70system 2:43.92elapsed 778%CPU (0avgtext+0avgdata 83452maxresident)

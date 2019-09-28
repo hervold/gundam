@@ -3,7 +3,6 @@ extern crate gundam;
 extern crate log;
 extern crate bio;
 extern crate chrono;
-//extern crate darwin_rs;
 extern crate env_logger;
 extern crate ndarray;
 
@@ -21,6 +20,7 @@ use gundam::*;
 use ndarray::prelude::Array2;
 use suffix::SuffixTable;
 
+use std::cmp::min;
 use std::env;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -38,6 +38,23 @@ fn main() -> Result<(), Box<Error>> {
     let _ = LogBuilder::new()
         .parse(&env::var("RUST_LOG").unwrap_or_default())
         .init();
+
+    let b = b"AAAAGNNNNNNNNNNNNNNNNNNNNNAATC";
+    let m = DNAMotif::from_degenerate(b).unwrap();
+    info!(
+        "{} - info: {}, thresh: {}",
+        str::from_utf8(b).unwrap(),
+        m.info_content(),
+        passing_threshold(&m)
+    );
+    let b = b"TCTGAGAGGTGTTGAACGTTCTTGCTTCTG";
+    let m = DNAMotif::from_degenerate(b).unwrap();
+    info!(
+        "{} - info: {}, thresh: {}",
+        str::from_utf8(b).unwrap(),
+        m.info_content(),
+        passing_threshold(&m)
+    );
 
     let args = env::args().collect::<Vec<String>>();
     if args.len() != 4 {
@@ -70,38 +87,53 @@ fn main() -> Result<(), Box<Error>> {
     let pos = read_seqs(&args[2]);
     let neg = read_seqs(&args[3]);
 
-    for idx in indices.into_iter() {
-        // there should be only one ...
-        for dyad in DyadMotif::<DNAMotif>::motifs(vec![idx], &pos, &neg, dyad::choose).iter() {
-            let degen_before = dyad.motif.degenerate_consensus();
-            let mean = dyad.refine_mean();
-            let degen_after = mean.motif.degenerate_consensus();
-            println!(
-                "{},{},{},{:e},{},{}",
-                idx.0,
-                idx.1,
-                idx.2,
-                idx.3,
-                str::from_utf8(degen_before.as_ref())?,
-                str::from_utf8(degen_after.as_ref())?,
-            );
-        }
-    }
+    // for each index, create a dyad from the index, and create a motif representing
+    // the "mean" of matching sequences
+    // then collect the degenerate representation of these motifs into a Vec
+    let indices_len = indices.len();
+    let log_every = min(10_000, indices_len / 50);
+    let mut degen_motifs = indices
+        .into_iter()
+        .enumerate()
+        .filter_map(|(ct, idx)| {
+            if ct % log_every == 0 {
+                info!("-- processing index {} / {}", ct, indices_len);
+            }
 
-    /*
-    let all_dyads = DyadMotif::<DNAMotif>::motifs(indices, &pos, &neg, dyad::choose);
-    for dyad in all_dyads.iter() {
-        uniq.insert(dyad.refine_mean().motif.degenerate_consensus());
-    }
-    info!("{} unique motifs out of {}", uniq.len(), all_dyads.len());
-    let mut motif_v: Vec<Vec<u8>> = uniq.into_iter().collect();
-    motif_v.sort_by_key(|s| -1 * s.len() as isize);
+            let motif_v_from_idx =
+                DyadMotif::<DNAMotif>::motifs(vec![idx], &pos, &neg, dyad::choose);
+            match motif_v_from_idx.len() {
+                0 => None,
+                1 => {
+                    if ct % log_every == 0 {
+                        info!(
+                            "-- motif - pos: {}/{}, neg: {}/{}",
+                            motif_v_from_idx[0].pos_seqs.len(),
+                            pos.len(),
+                            motif_v_from_idx[0].neg_seqs.len(),
+                            neg.len()
+                        );
+                    }
+                    let mean = motif_v_from_idx[0].refine_mean();
+                    Some(mean.motif.degenerate_consensus())
+                }
+                _ => unreachable!(),
+            }
+        })
+        .collect::<Vec<_>>();
 
-    let mut all_seqs: Vec<u8> = vec![];
+    // sort the Vec of degenerate motifs
+    degen_motifs.sort();
+    degen_motifs.sort_by_key(|s| -1 * s.len() as isize);
+
+    info!("-- finished generating degenerate motifs");
+
+    // use a suffix tree to find the longest version of each motif
     let mut not_subst_idx = vec![];
-    for (idx, motif_s) in motif_v.iter().enumerate() {
+    let mut all_seqs: Vec<u8> = vec![];
+    for (idx, motif_s) in degen_motifs.iter().enumerate() {
         let found = {
-            let suff_table = SuffixTable::new(str::from_utf8(all_seqs.as_ref())?);
+            let suff_table = suffix::SuffixTable::new(str::from_utf8(all_seqs.as_ref())?);
             let s: &[u8] = motif_s.as_ref();
             suff_table.contains(str::from_utf8(s)?)
                 || suff_table.contains(str::from_utf8(revcomp(s).as_slice())?)
@@ -114,9 +146,11 @@ fn main() -> Result<(), Box<Error>> {
         }
     }
 
-    for idx in not_subst_idx {
-        println!("{}", str::from_utf8(motif_v[idx].as_ref())?);
+    info!("-- found uniqs");
+
+    for i in not_subst_idx.into_iter() {
+        println!("{}", str::from_utf8(degen_motifs[i].as_ref()).unwrap());
     }
-     */
+
     Ok(())
 }

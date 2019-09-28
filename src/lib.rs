@@ -51,7 +51,7 @@ pub const KMER_LEN: usize = 5;
 const MIN_GAP: usize = 0;
 const MAX_GAP: usize = 20;
 const MUT_INCR: f32 = 0.2;
-const MIN_SCORE: f32 = 0.9;
+pub const MIN_SCORE: f32 = 0.9;
 pub const EPSILON: f32 = 1e-4;
 
 lazy_static! {
@@ -79,6 +79,10 @@ pub fn scaled_fisher(_ct1: usize, _tot1: usize, _ct2: usize, _tot2: usize) -> f6
         (max(1, (scale * _ct2 as f64) as i32), 10_000)
     };
 
+    info!(
+        "[[{},{}],[{},{}]] -> [[{},{}],[{},{}]]",
+        _ct1, _tot1, _ct2, _tot2, ct1, tot1, ct2, tot2
+    );
     fishers_exact(&[ct1, ct2, tot1, tot2], TestTails::One)
 }
 

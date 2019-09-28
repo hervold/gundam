@@ -4,36 +4,39 @@ extern crate log;
 extern crate env_logger;
 extern crate fishers_exact;
 extern crate gundam;
+extern crate itertools;
 extern crate jobsteal;
 extern crate ndarray;
 extern crate suffix;
 #[macro_use]
 extern crate ergo_std;
-
+use bio::alphabets::dna::revcomp;
+use bio::pattern_matching::pssm::{DNAMotif, Motif, PSSMError};
+use env_logger::Builder as LogBuilder;
+use fishers_exact::{fishers_exact, TestTails};
 use gundam::ctr::GappedKmerCtr;
 use gundam::dyad::{choose, read_seqs, DyadMotif, MatrixPlus, MotifHistory};
 use gundam::kmer_idx;
 use gundam::kmer_idx::KmerIndex;
 use gundam::*;
 use gundam::{scaled_fisher, CPU_COUNT, KMER_LEN};
-
-use bio::alphabets::dna::revcomp;
-use std::collections::HashSet;
-
-use bio::pattern_matching::pssm::{DNAMotif, Motif, PSSMError};
-use env_logger::Builder as LogBuilder;
-use fishers_exact::{fishers_exact, TestTails};
+use itertools::join;
+use itertools::Itertools;
 use jobsteal::{make_pool, BorrowSpliterator, IntoSpliterator, Pool, Spliterator};
 use ndarray::prelude::{Array, Array2, AsArray};
+use std::cmp::min;
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::env;
 use std::error::Error;
 use std::f64;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
+use std::ops::Range;
 use std::process::exit;
 use std::str;
-//use suffix::SuffixTable;
-
+use suffix::SuffixTable;
+const KMER_SPLIT: usize = 5;
 const DELIMITER: u8 = b'$';
 
 fn main() -> Result<(), Box<Error>> {
@@ -55,182 +58,136 @@ fn main() -> Result<(), Box<Error>> {
     let pos = read_seqs(&args[2]);
     let neg = read_seqs(&args[3]);
 
-    let mut pool = make_pool(*CPU_COUNT).unwrap();
-
-    let file = File::open(&args[1]).expect("can't open motifs file");
-    /*
-    for line in BufReader::new(&file).lines() {
-        uniq.insert(line?.as_bytes().to_vec());
-    }*/
-
-    let indices: Vec<(usize, usize, usize, f64)> = BufReader::new(file)
-        .lines()
-        .map(|line| {
-            let a = line
-                .as_ref()
-                .expect("no line?")
-                .split(",")
-                .collect::<Vec<&str>>();
-            (
-                a[0].parse::<usize>().expect("first"),
-                a[1].parse::<usize>().expect("second"),
-                a[2].parse::<usize>().expect("third"),
-                a[3].parse::<f64>().expect("fourth"),
-            )
-        })
-        .collect();
+    info!("pos.len(): {}, neg.len(): {}", pos.len(), neg.len());
 
     let pos_idx = KmerIndex::new(&pos);
     let neg_idx = KmerIndex::new(&neg);
 
-    /// stage 1: we have kmer pairs, which we'll
-    /// (1) convert to DNAMotif's and use to pick sequnences, then
-    /// (2) use those sequences to find a mean representation
-    /// (3) uniq representations are checked for uniqueness
-    /// ie, this is the first cycle of our EM
-    let mut uniq: HashSet<Vec<u8>> = HashSet::new();
-    for (i, j, k, _) in indices.into_iter() {
-        let init: DNAMotif = (DyadMotif::<DNAMotif>::kmers_to_matrix(
-            GappedKmerCtr::<DNAMotif>::int_to_kmer(KMER_LEN, i).as_slice(),
-            k,
-            GappedKmerCtr::<DNAMotif>::int_to_kmer(KMER_LEN, j).as_slice(),
-        ))
-        .into();
+    let mut pool = make_pool(*CPU_COUNT).unwrap();
 
-        let x: Result<(), Box<Error>> = (|| {
-            let chosen_pos_idx = kmer_heur(&init, 0.99, &pos_idx)?;
-            let chosen_pos = chosen_pos_idx
-                .iter()
-                .map(|i| pos[*i].clone())
-                .collect::<Vec<_>>();
-            let chosen_neg_idx = kmer_heur(&init, 0.99, &pos_idx)?;
-            let chosen_neg = chosen_neg_idx
-                .iter()
-                .map(|i| neg[*i].clone())
-                .collect::<Vec<_>>();
+    let file = File::open(&args[1]).expect("can't open motifs file");
 
-            let (p_val, dyad) = seqs_to_dyad(
-                &mut pool,
-                &init,
-                &chosen_pos,
-                pos.len(),
-                &chosen_neg,
-                neg.len(),
-            );
+    let mut scores: HashMap<Vec<u8>, Vec<String>> = HashMap::new();
 
-            let degen_before = dyad.motif.degenerate_consensus();
-            let mean = dyad.refine_mean();
-            let degen_after = mean.motif.degenerate_consensus();
+    for (num, motif_) in BufReader::new(file).lines().enumerate() {
+        let motif = motif_.unwrap();
 
-            uniq.insert(degen_after);
-            Ok(())
-        })();
-    }
-    info!("-- finished creating {} mean-motifs", uniq.len());
-
-    let mut motif_v: Vec<Vec<u8>> = uniq.into_iter().collect();
-    motif_v.sort();
-    motif_v.sort_by_key(|s| -1 * s.len() as isize);
-
-    let mut not_subst_idx = vec![];
-    let mut all_seqs: Vec<u8> = vec![];
-    for (idx, motif_s) in motif_v.iter().enumerate() {
-        let found = {
-            let suff_table = suffix::SuffixTable::new(str::from_utf8(all_seqs.as_ref())?);
-            let s: &[u8] = motif_s.as_ref();
-            suff_table.contains(str::from_utf8(s)?)
-                || suff_table.contains(str::from_utf8(revcomp(s).as_slice())?)
-        };
-        if !found {
-            all_seqs.extend(motif_s.iter());
-            all_seqs.push(DELIMITER);
-
-            not_subst_idx.push(idx);
-        }
-    }
-
-    info!("-- after suffix tree, {} left", not_subst_idx.len());
-
-    //let vals = vec![];
-    let mut uniq: HashSet<Vec<u8>> = HashSet::new();
-    for (num, idx) in not_subst_idx.iter().enumerate() {
         if num % 50 == 0 {
-            info!("motif #{} / {}", num, not_subst_idx.len());
+            info!("motif #{}: {}", num, motif.as_str());
         }
-        let motif_init = DNAMotif::from_degenerate(motif_v[*idx].as_ref())?;
+        let motif_init = DNAMotif::from_degenerate(motif.as_bytes()).unwrap();
         let mut final_pval: f64 = 0.0;
         let mut final_cts = (0, 0);
         let mut final_degen = vec![];
 
-        match (|| -> Result<(), Box<Error>> {
-            let mut chosen_pos = vec![];
-            let mut chosen_neg = vec![];
-            let mut motif = motif_init.clone();
-            let mut p_val: f64 = 0.0;
-            let mut hist = vec![];
+        for window_num in 0..KMER_SPLIT {
+            if num % 50 == 0 {
+                info!("~~ motif #{}, window #{}", num, window_num);
+            }
 
-            loop {
-                let mut final_dyad = DyadMotif::<DNAMotif>::new();
+            // we likely have different sequence counts, so the windows differ
+            let pos_exclude = window_num * (pos.len() / KMER_SPLIT)
+                ..min((window_num + 1) * (pos.len() / KMER_SPLIT), pos.len());
+            let neg_exclude = window_num * (neg.len() / KMER_SPLIT)
+                ..min((window_num + 1) * (neg.len() / KMER_SPLIT), neg.len());
 
-                let chosen_pos_idx = kmer_heur(&motif, 0.99, &pos_idx)?;
-                chosen_pos = chosen_pos_idx.iter().map(|i| pos[*i].clone()).collect();
-                let chosen_neg_idx = kmer_heur(&motif, 0.99, &pos_idx)?;
-                chosen_neg = chosen_neg_idx.iter().map(|i| neg[*i].clone()).collect();
+            match (|| -> Result<(), Box<Error>> {
+                let mut motif = motif_init.clone();
+                let mut p_val: f64 = 0.0;
+                let mut hist = vec![];
 
-                let t = mean_until_stable(
-                    &mut pool,
-                    &motif,
-                    &chosen_pos,
-                    pos.len(),
-                    &chosen_neg,
-                    neg.len(),
-                );
-                p_val = t.0;
-                final_dyad = t.1;
-                final_dyad.history = hist;
+                let threshold = passing_threshold(&motif).sqrt();
 
-                if final_dyad.slide() {
-                    motif = final_dyad.motif.clone();
-                    hist = final_dyad.history.clone();
-                } else {
-                    final_pval = p_val;
-                    final_degen = final_dyad.motif.degenerate_consensus();
-                    final_cts = (final_dyad.pos_seqs.len(), final_dyad.neg_seq_ct);
-                    break;
+                // loop to handle "slide" operation
+                loop {
+                    let mut final_dyad = DyadMotif::<DNAMotif>::new();
+                    let mut pos_v = motif.eval_seqs(&mut pool, &pos);
+                    let mut neg_v = motif.eval_seqs(&mut pool, &neg);
+
+                    let (chosen_pos_, _, chosen_neg_) = choose(threshold, &mut pos_v, &mut neg_v);
+                    let chosen_pos = chosen_pos_
+                        .into_iter()
+                        .map(|(seq, _)| seq.iter().map(|&b| b).collect())
+                        .collect();
+                    let chosen_neg = chosen_neg_
+                        .into_iter()
+                        .map(|(seq, _)| seq.iter().map(|&b| b).collect())
+                        .collect();
+                    let t = mean_until_stable(
+                        &mut pool,
+                        &motif,
+                        &chosen_pos,
+                        pos.len(),
+                        &chosen_neg,
+                        neg.len(),
+                        threshold,
+                    );
+                    p_val = t.0;
+                    final_dyad = t.1;
+                    final_dyad.history = hist;
+
+                    info!(
+                        "~~ after stable: {}",
+                        Seq(final_dyad.motif.degenerate_consensus().as_ref())
+                    );
+
+                    if final_dyad.slide() {
+                        motif = final_dyad.motif.clone();
+                        hist = final_dyad.history.clone();
+                    } else {
+                        final_pval = p_val;
+                        final_degen = final_dyad.motif.degenerate_consensus();
+                        final_cts = (final_dyad.pos_seqs.len(), final_dyad.neg_seq_ct);
+                        info!(
+                            "~~ hist for {}: {:?}",
+                            Seq(final_degen.as_ref()),
+                            &final_dyad.history
+                        );
+                        break;
+                    }
+                }
+
+                Ok(())
+            })() {
+                Ok(()) => (),
+                Err(e) => {
+                    info!("~~~~~ ERROR: {:?}", e);
+                    final_pval = -1.0;
                 }
             }
+            info!(
+                "~~ #{}, window {} - final degen: {}",
+                num,
+                window_num,
+                Seq(final_degen.as_ref())
+            );
 
-            Ok(())
-        })() {
-            Ok(()) => (),
-            Err(_) => {
-                final_pval = -1.0;
+            // we should have a motif for this batch of sequences, excluding the window - ie, most
+            // sequences were used to train
+            // next calculate its score using the excluded sequences, ie, the validation set
+            if final_pval != -1.0 {
+                let motif = DNAMotif::from_degenerate(final_degen.as_ref()).unwrap();
+                let pos_s = pos_exclude.map(|i| pos[i].clone()).collect();
+                let neg_s = neg_exclude.map(|i| neg[i].clone()).collect();
+                let (pval, _) = seqs_to_dyad(
+                    &mut pool,
+                    &motif,
+                    &pos_s,
+                    pos_s.len(),
+                    &neg_s,
+                    neg_s.len(),
+                    Some(passing_threshold(&motif)),
+                );
+                scores
+                    .entry(motif.degenerate_consensus())
+                    .or_insert_with(|| vec![])
+                    .push(format!("motif-{}|window-{}|{:.5e}", num, window_num, pval));
             }
         }
-        /*
-        vals.push((
-            motif_init.degenerate_consensus(),
-            final_degen,
-            final_pval,
-            final_cts.0,
-            pos.len(),
-            final_cts.1,
-            neg.len(),
-        ));*/
-
-        if !uniq.contains(final_degen.as_slice()) {
-            println!(
-                "{},{},{:e},{},{},{},{}",
-                String::from_utf8(motif_init.degenerate_consensus())?,
-                str::from_utf8(final_degen.as_slice())?,
-                final_pval,
-                final_cts.0,
-                pos.len(),
-                final_cts.1,
-                neg.len(),
-            );
-            uniq.insert(final_degen);
-        }
+    }
+    info!("done!");
+    for (degen, pvals) in scores {
+        println!("{},{}", Seq(degen.as_ref()), pvals.iter().join(","));
     }
 
     Ok(())
