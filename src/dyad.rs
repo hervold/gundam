@@ -205,8 +205,8 @@ where
                 );
             }
 
-            let mut pos_v = init.eval_seqs(&mut pool, pos);
-            let mut neg_v = init.eval_seqs(&mut pool, neg);
+            let mut pos_v = init.eval_seqs(&mut pool, pos.iter().map(|s| s.as_ref()));
+            let mut neg_v = init.eval_seqs(&mut pool, neg.iter().map(|s| s.as_ref()));
             let (pos_seqs, neg_ct, neg_seqs) =
                 chooser(passing_threshold(&init), &mut pos_v, &mut neg_v);
 
@@ -477,20 +477,26 @@ where
 }
 
 pub trait MatrixPlus<'a> {
-    fn eval_seqs(&self, pool: &mut Pool, seqs: &'a Vec<Vec<u8>>) -> Vec<(&'a [u8], ScoredPos)>;
+    fn eval_seqs(
+        &self,
+        pool: &mut Pool,
+        seqs: impl Iterator<Item = &'a [u8]>,
+    ) -> Vec<(&'a [u8], ScoredPos)>;
     fn normalize_scores(&mut self);
 }
 
 impl<'a> MatrixPlus<'a> for DNAMotif {
     /// apply motif to sequences in a FASTA file, returning sequences and scores
-    fn eval_seqs(&self, pool: &mut Pool, seqs: &'a Vec<Vec<u8>>) -> Vec<(&'a [u8], ScoredPos)> {
+    fn eval_seqs(
+        &self,
+        pool: &mut Pool,
+        seqs: impl Iterator<Item = &'a [u8]>,
+    ) -> Vec<(&'a [u8], ScoredPos)> {
         // FIXME: b/c we wind up re-analyzing these files again and again,
         // we should probably just read into memory once and be done w/ it
 
-        let mut results: Vec<(&'a [u8], ScoredPos)> = seqs
-            .iter()
-            .map(|seq| (seq.as_ref(), ScoredPos::default()))
-            .collect();
+        let mut results: Vec<(&'a [u8], ScoredPos)> =
+            seqs.map(|seq| (seq, ScoredPos::default())).collect();
         results
             .split_iter_mut()
             .for_each(&pool.spawner(), |p| match self.score(p.0) {
@@ -585,18 +591,30 @@ pub fn read_seqs(fname: &str) -> Vec<Vec<u8>> {
         .collect()
 }
 
+/// wrapper to make seqs_to_dyad more usable
+pub enum SeqRefList<'a, 'b> {
+    WithSP(&'b mut dyn Iterator<Item = &'a (&'a [u8], ScoredPos)>),
+    Without(&'b mut dyn Iterator<Item = &'a [u8]>),
+}
+
 /// given motif, choose matching sequences.  resulting dyad has two copies of the motif (init and motif)
-pub fn seqs_to_dyad<'a>(
+pub fn seqs_to_dyad<'a, 'b>(
     mut cpu_pool: &mut Pool,
     init: &DNAMotif,
-    pos: &'a Vec<Vec<u8>>,
+    pos: SeqRefList<'a, 'b>,
     pos_ct: usize,
-    neg: &'a Vec<Vec<u8>>,
+    neg: SeqRefList<'a, 'b>,
     neg_ct: usize,
     threshold: Option<f32>,
 ) -> (f64, DyadMotif<'a, DNAMotif>) {
-    let mut pos_v = init.eval_seqs(cpu_pool, pos);
-    let mut neg_v = init.eval_seqs(cpu_pool, neg);
+    let mut pos_v = match pos {
+        SeqRefList::WithSP(it) => init.eval_seqs(cpu_pool, it.map(|t| t.0)),
+        SeqRefList::Without(it) => init.eval_seqs(cpu_pool, it),
+    };
+    let mut neg_v = match neg {
+        SeqRefList::WithSP(it) => init.eval_seqs(cpu_pool, it.map(|t| t.0)),
+        SeqRefList::Without(it) => init.eval_seqs(cpu_pool, it),
+    };
 
     let thresh = threshold.unwrap_or_else(|| passing_threshold(init));
     let (pos_seqs, neg_hits, neg_seqs) = choose(thresh, &mut pos_v, &mut neg_v);
@@ -620,18 +638,18 @@ pub fn seqs_to_dyad<'a>(
 pub fn em_cycle<'a>(
     mut cpu_pool: &mut Pool,
     init: &DNAMotif,
-    pos: &'a Vec<Vec<u8>>,
+    pos: &'a Vec<(&'a [u8], ScoredPos)>,
     pos_ct: usize,
-    neg: &'a Vec<Vec<u8>>,
+    neg: &'a Vec<(&'a [u8], ScoredPos)>,
     neg_ct: usize,
     threshold: f32,
 ) -> (f32, f64, DNAMotif) {
     let (p_val, dyad) = seqs_to_dyad(
         &mut cpu_pool,
         init,
-        pos,
+        SeqRefList::WithSP(&mut pos.iter()),
         pos_ct,
-        neg,
+        SeqRefList::WithSP(&mut neg.iter()),
         neg_ct,
         Some(threshold),
     );
@@ -658,22 +676,24 @@ pub fn em_cycle<'a>(
 pub fn mean_until_stable<'a>(
     mut cpu_pool: &mut Pool,
     init: &DNAMotif,
-    pos: &'a Vec<Vec<u8>>,
+    pos: &'a Vec<(&'a [u8], ScoredPos)>,
     pos_ct: usize,
-    neg: &'a Vec<Vec<u8>>,
+    neg: &'a Vec<(&'a [u8], ScoredPos)>,
     neg_ct: usize,
     threshold: f32,
 ) -> (f64, DyadMotif<'a, DNAMotif>) {
-    let (dist, p_val, motif) = em_cycle(&mut cpu_pool, init, pos, pos_ct, neg, neg_ct, threshold);
+    let (dist, p_val, motif) = em_cycle(&mut cpu_pool, init, &pos, pos_ct, &neg, neg_ct, threshold);
     info!("mean_until_stable: dist={}, EPISOLON={}", dist, EPSILON);
     if dist < EPSILON {
         info!("~~ found thing");
+        let mut p = pos.iter();
+        let mut n = neg.iter();
         seqs_to_dyad(
             &mut cpu_pool,
             &motif,
-            pos,
+            SeqRefList::WithSP(&mut p),
             pos_ct,
-            neg,
+            SeqRefList::WithSP(&mut n),
             neg_ct,
             Some(threshold),
         )

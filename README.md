@@ -80,3 +80,4 @@ RUST_LOG=info ./target/release/gundam_kmer_to_degen fake_kmers.txt fake_pos.fa f
 
 ==
 no kmers; too many allocs (input size: 3) - 971.58user 304.70system 2:43.92elapsed 778%CPU (0avgtext+0avgdata 83452maxresident)
+reduced allocs: 966.95user 285.15system 2:46.21elapsed 753%CPU (0avgtext+0avgdata 82248maxresident
