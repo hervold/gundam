@@ -100,18 +100,37 @@ fn main() -> Result<(), Box<Error>> {
                 let neg_exclude = window_num * (neg.len() / KMER_SPLIT)
                     ..min((window_num + 1) * (neg.len() / KMER_SPLIT), neg.len());
 
+                let kmer_pos = kmer_heur(&motif_init, &pos_idx, Some(&pos_exclude))?;
+                let kmer_neg = kmer_heur(&motif_init, &neg_idx, Some(&neg_exclude))?;
+
                 match (|| -> Result<(), Box<Error>> {
                     let mut motif = motif_init.clone();
                     let mut p_val: f64 = 0.0;
                     let mut hist = vec![];
 
-                    //let threshold = passing_threshold(&motif).sqrt();
-
                     // loop to handle "slide" operation
                     loop {
                         let mut final_dyad = DyadMotif::<DNAMotif>::new();
-                        let mut pos_v = motif.eval_seqs(&mut pool, pos.iter().map(|s| s.as_ref()));
-                        let mut neg_v = motif.eval_seqs(&mut pool, neg.iter().map(|s| s.as_ref()));
+                        let mut pos_v = motif.eval_seqs(
+                            &mut pool,
+                            pos.iter().enumerate().filter_map(|(i, s)| {
+                                if kmer_pos.contains(&i) {
+                                    Some(s.as_ref())
+                                } else {
+                                    None
+                                }
+                            }),
+                        );
+                        let mut neg_v = motif.eval_seqs(
+                            &mut pool,
+                            neg.iter().enumerate().filter_map(|(i, s)| {
+                                if kmer_neg.contains(&i) {
+                                    Some(s.as_ref())
+                                } else {
+                                    None
+                                }
+                            }),
+                        );
 
                         let (chosen_pos, _, chosen_neg) = choose(threshold, &mut pos_v, &mut neg_v);
                         let t = mean_until_stable(

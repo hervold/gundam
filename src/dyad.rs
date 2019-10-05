@@ -708,7 +708,8 @@ pub fn passing_threshold(motif: &DNAMotif) -> f32 {
     72.54231453 / (motif.info_content() + 75.48262684)
 }
 
-/// returns list of sequence indices matching motif by apply motif to all kmers in index, and filtering by threshhold
+/// returns list of sequence indices matching motif by applying the motif to all kmers
+/// in the index, and filtering by threshhold
 pub fn kmer_heur(
     motif: &DNAMotif,
     kmers: &KmerIndex,
@@ -724,15 +725,19 @@ pub fn kmer_heur(
             }
             Err(e) => return Err(e),
             Ok(sp) => {
-                // ignore matches overlapping with excluded range
-                if let Some(r) = exclude {
-                    if r.contains(&sp.loc) || r.contains(&(sp.loc + sp.scores.len())) {
-                        continue;
-                    }
-                }
-
                 if sp.sum >= threshold {
-                    all_ids.extend(ids.iter());
+                    if let Some(r) = exclude {
+                        // ignore matches overlapping with excluded range
+                        all_ids.extend(ids.iter().filter_map(|i| {
+                            if r.contains(i) {
+                                None
+                            } else {
+                                Some(*i)
+                            }
+                        }));
+                    } else {
+                        all_ids.extend(ids.iter());
+                    }
                 }
             }
         }
