@@ -16,8 +16,6 @@ use env_logger::Builder as LogBuilder;
 use fishers_exact::{fishers_exact, TestTails};
 use gundam::ctr::GappedKmerCtr;
 use gundam::dyad::{choose, read_seqs, DyadMotif, MatrixPlus, MotifHistory};
-use gundam::kmer_idx;
-use gundam::kmer_idx::KmerIndex;
 use gundam::*;
 use gundam::{scaled_fisher, CPU_COUNT, KMER_LEN};
 use itertools::join;
@@ -63,9 +61,6 @@ fn main() -> Result<(), Box<Error>> {
 
     info!("pos.len(): {}, neg.len(): {}", pos.len(), neg.len());
 
-    let pos_idx = KmerIndex::new(&pos);
-    let neg_idx = KmerIndex::new(&neg);
-
     let mut pool = make_pool(*CPU_COUNT).unwrap();
 
     println!("idx,initial_motif,final_motif,init_info_content,threshold,values");
@@ -100,9 +95,6 @@ fn main() -> Result<(), Box<Error>> {
                 let neg_exclude = window_num * (neg.len() / KMER_SPLIT)
                     ..min((window_num + 1) * (neg.len() / KMER_SPLIT), neg.len());
 
-                let kmer_pos = kmer_heur(&motif_init, &pos_idx, Some(&pos_exclude))?;
-                let kmer_neg = kmer_heur(&motif_init, &neg_idx, Some(&neg_exclude))?;
-
                 match (|| -> Result<(), Box<Error>> {
                     let mut motif = motif_init.clone();
                     let mut p_val: f64 = 0.0;
@@ -111,26 +103,9 @@ fn main() -> Result<(), Box<Error>> {
                     // loop to handle "slide" operation
                     loop {
                         let mut final_dyad = DyadMotif::<DNAMotif>::new();
-                        let mut pos_v = motif.eval_seqs(
-                            &mut pool,
-                            pos.iter().enumerate().filter_map(|(i, s)| {
-                                if kmer_pos.contains(&i) {
-                                    Some(s.as_ref())
-                                } else {
-                                    None
-                                }
-                            }),
-                        );
-                        let mut neg_v = motif.eval_seqs(
-                            &mut pool,
-                            neg.iter().enumerate().filter_map(|(i, s)| {
-                                if kmer_neg.contains(&i) {
-                                    Some(s.as_ref())
-                                } else {
-                                    None
-                                }
-                            }),
-                        );
+                        let mut pos_v = motif.eval_seqs(&mut pool, pos.iter().map(|s| s.as_ref()));
+
+                        let mut neg_v = motif.eval_seqs(&mut pool, neg.iter().map(|s| s.as_ref()));
 
                         let (chosen_pos, _, chosen_neg) = choose(threshold, &mut pos_v, &mut neg_v);
                         let t = mean_until_stable(
