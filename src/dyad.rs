@@ -45,8 +45,8 @@ where
     pub history: Vec<MotifHistory>,
     /// weights updated by GA
     pub motif: M,
-    /// kmer len
-    pub kmer_len: usize,
+    /// kmer lens
+    pub kmer_len: (usize, usize),
     /// gap len
     pub gap_len: usize,
     /// sequences matching our motif
@@ -69,7 +69,7 @@ where
             init: m.clone(),
             history: vec![],
             motif: m.clone(),
-            kmer_len: 0,
+            kmer_len: (0, 0),
             gap_len: 0,
             pos_seqs: vec![],
             neg_seqs: vec![],
@@ -78,8 +78,13 @@ where
         }
     }
 
-    fn fasta_to_ctr(fname: &str) -> (GappedKmerCtr<M>, usize) {
-        let mut ctr = GappedKmerCtr::new(KMER_LEN, MIN_GAP, MAX_GAP);
+    fn fasta_to_ctr_p(
+        fname: &str,
+        kmer_len: usize,
+        min_gap: usize,
+        max_gap: usize,
+    ) -> (GappedKmerCtr<M>, usize) {
+        let mut ctr = GappedKmerCtr::new(kmer_len, min_gap, max_gap);
         let mut tot = 0;
 
         for _rec in fasta::Reader::from_file(fname)
@@ -92,6 +97,10 @@ where
         }
 
         (ctr, tot)
+    }
+
+    fn fasta_to_ctr(fname: &str) -> (GappedKmerCtr<M>, usize) {
+        DyadMotif::fasta_to_ctr_p(fname, KMER_LEN, MIN_GAP, MAX_GAP)
     }
 
     pub fn kmers_to_matrix(kmer1: &[u8], gap_len: usize, kmer2: &[u8]) -> Array2<f32> {
@@ -115,42 +124,51 @@ where
     }
 
     /// generate kmers, tablulate, and apply Fisher exact test
-    pub fn passing_kmers(pos_fname: &str, neg_fname: &str) -> Vec<(usize, usize, usize, f64)> {
-        let (pos, pos_ct) = DyadMotif::<DNAMotif>::fasta_to_ctr(pos_fname);
-        let (neg, neg_ct) = DyadMotif::<DNAMotif>::fasta_to_ctr(neg_fname);
-
-        let (width, height, gap) = pos.ctr.dim();
-
+    pub fn passing_kmers(
+        pos_fname: &str,
+        neg_fname: &str,
+        specs: &Vec<(usize, usize, usize)>,
+    ) -> Vec<(usize, usize, usize, f64)> {
         let cutoff = P_CUTOFF / 2.0_f64.powi(2 * KMER_LEN as i32);
         info!("-- using cutoff: {:e}", cutoff);
 
         let mut pool = make_pool(*CPU_COUNT).unwrap();
         debug!("-- passing_kmers - created pool of {} threads", *CPU_COUNT);
-        let mut indices: Vec<(usize, Vec<(usize, usize, f64)>)> =
-            (0..width).map(|i| (i, vec![])).collect();
-        indices
-            .split_iter_mut()
-            .for_each(&pool.spawner(), |&mut (ref i, ref mut v)| {
-                //for i in 0..width {
-                for j in 0..height {
-                    for k in 0..gap {
-                        if pos.ctr[[*i, j, k]] > neg.ctr[[*i, j, k]] {
-                            let p = scaled_fisher(
-                                pos.ctr[[*i, j, k]],
-                                pos_ct,
-                                neg.ctr[[*i, j, k]],
-                                neg_ct,
-                            );
-                            if p < P_CUTOFF {
-                                v.push((j, k, p));
-                            };
+        let mut passing = Vec::new();
+
+        let default = vec![(KMER_LEN, MIN_GAP, MAX_GAP)];
+        for &(kmer_len, min_gap, max_gap) in (if specs.len() == 0 { &default } else { specs }) {
+            let (pos, pos_ct) =
+                DyadMotif::<DNAMotif>::fasta_to_ctr_p(pos_fname, kmer_len, min_gap, max_gap);
+            let (neg, neg_ct) =
+                DyadMotif::<DNAMotif>::fasta_to_ctr_p(neg_fname, kmer_len, min_gap, max_gap);
+            let (width, height, gap) = pos.ctr.dim();
+
+            let mut indices: Vec<(usize, Vec<(usize, usize, f64)>)> =
+                (0..width).map(|i| (i, vec![])).collect();
+            indices
+                .split_iter_mut()
+                .for_each(&pool.spawner(), |&mut (ref i, ref mut v)| {
+                    //for i in 0..width {
+                    for j in 0..height {
+                        for k in 0..gap {
+                            if pos.ctr[[*i, j, k]] > neg.ctr[[*i, j, k]] {
+                                let p = scaled_fisher(
+                                    pos.ctr[[*i, j, k]],
+                                    pos_ct,
+                                    neg.ctr[[*i, j, k]],
+                                    neg_ct,
+                                );
+                                if p < P_CUTOFF {
+                                    v.push((j, k, p));
+                                };
+                            }
                         }
                     }
-                }
-            });
-        let mut passing = Vec::new();
-        for (i, v) in indices {
-            passing.extend(v.iter().map(|&(j, k, p)| (i, j, k, p)));
+                });
+            for (i, v) in indices {
+                passing.extend(v.iter().map(|&(j, k, p)| (i, j, k, p)));
+            }
         }
         passing
     }
@@ -222,7 +240,7 @@ where
                 init: init,
                 history: vec![MotifHistory::Init],
                 motif: copy,
-                kmer_len: KMER_LEN,
+                kmer_len: (KMER_LEN, KMER_LEN),
                 gap_len: MIN_GAP + k,
                 pos_seqs: pos_seqs,
                 neg_seqs: neg_seqs,
@@ -624,7 +642,7 @@ pub fn seqs_to_dyad<'a, 'b>(
             init: init.clone(),
             history: vec![MotifHistory::Init],
             motif: init.clone(),
-            kmer_len: 0,
+            kmer_len: (0, 0),
             gap_len: 0,
             pos_seqs: pos_seqs,
             neg_seqs: neg_seqs,
@@ -805,7 +823,7 @@ mod tests {
     #[ignore]
     fn test_find_one_motif() {
         println!("dyad::test_find");
-        let v = DyadMotif::<DNAMotif>::passing_kmers(POS_FNAME, NEG_FNAME);
+        let v = DyadMotif::<DNAMotif>::passing_kmers(POS_FNAME, NEG_FNAME, vec![].as_ref());
         let pos = read_seqs(POS_FNAME);
         let neg = read_seqs(NEG_FNAME);
         let dyads = DyadMotif::<DNAMotif>::motifs(v, &pos, &neg, choose);
@@ -837,7 +855,7 @@ mod tests {
     fn test_find_motifs() {
         env_logger::init();
         info!("################### test->test_find_motifs ###################");
-        let v = DyadMotif::<DNAMotif>::passing_kmers(POS_FNAME, NEG_FNAME);
+        let v = DyadMotif::<DNAMotif>::passing_kmers(POS_FNAME, NEG_FNAME, vec![].as_ref());
         info!("{} passing kmers", v.len());
         //find_motifs(v, POS_FNAME, NEG_FNAME);
     }
@@ -904,10 +922,10 @@ mod tests {
         let pos_seqs = read_seqs(POS_FNAME);
         let neg_seqs = read_seqs(NEG_FNAME);
 
-        let mut p = motif.eval_seqs(&mut pool, &pos_seqs);
-        let mut n = motif.eval_seqs(&mut pool, &neg_seqs);
+        let mut p = motif.eval_seqs(&mut pool, pos_seqs.iter().map(|s| s.as_slice()));
+        let mut n = motif.eval_seqs(&mut pool, neg_seqs.iter().map(|s| s.as_slice()));
         println!("p: {:?}", p.iter().map(|t| t.1.sum).collect::<Vec<f32>>());
-        let (pos_seqs, _, neg_seqs) = choose(&mut p, &mut n);
+        let (pos_seqs, _, neg_seqs) = choose(0.97, &mut p, &mut n);
         println!("pos_seqs.len: {}", pos_seqs.len());
     }
 
@@ -930,7 +948,7 @@ mod tests {
             init: m1.clone(),
             history: vec![MotifHistory::Init],
             motif: m1.clone(),
-            kmer_len: 0,
+            kmer_len: (0,0),
             gap_len: 0,
             pos_seqs: vec![],
             neg_seqs: vec![],
@@ -957,7 +975,7 @@ mod tests {
             init: m2.clone(),
             history: vec![MotifHistory::Init],
             motif: m2.clone(),
-            kmer_len: 0,
+            kmer_len: (0,0),
             gap_len: 0,
             pos_seqs: vec![],
             neg_seqs: vec![],

@@ -48,8 +48,8 @@ pub use kmer_idx::KmerIndex;
 //pub use dyad::find_motifs;
 
 pub const KMER_LEN: usize = 5;
-const MIN_GAP: usize = 0;
-const MAX_GAP: usize = 20;
+pub const MIN_GAP: usize = 0;
+pub const MAX_GAP: usize = 20;
 const MUT_INCR: f32 = 0.2;
 pub const MIN_SCORE: f32 = 0.9;
 pub const EPSILON: f32 = 1e-4;
@@ -244,7 +244,7 @@ mod tests {
     #[test]
     #[ignore]
     fn test_find() {
-        let v = DyadMotif::<DNAMotif>::passing_kmers(POS_FNAME, NEG_FNAME);
+        let v = DyadMotif::<DNAMotif>::passing_kmers(POS_FNAME, NEG_FNAME, vec![].as_ref());
         let pos = read_seqs(POS_FNAME);
         let neg = read_seqs(NEG_FNAME);
         let dyads: Vec<DyadMotif<DNAMotif>> = DyadMotif::<DNAMotif>::motifs(v, &pos, &neg, choose);

@@ -20,7 +20,14 @@ fn main() {
         exit(1);
     }
 
-    for (i, j, k, f) in DyadMotif::<DNAMotif>::passing_kmers(args[1].as_str(), args[2].as_str()) {
+    let kmer_specs = vec![
+        (KMER_LEN, MIN_GAP, MAX_GAP), // 5, 0, 20
+        (4, 0, 2),
+        (3, 0, 2),
+    ];
+    for (i, j, k, f) in
+        DyadMotif::<DNAMotif>::passing_kmers(args[1].as_str(), args[2].as_str(), &kmer_specs)
+    {
         println!("{},{},{},{:e}", i, j, k, f);
     }
 }

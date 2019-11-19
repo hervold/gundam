@@ -11,7 +11,7 @@ where
     M: Motif,
 {
     pub ctr: Array3<usize>,
-    pub kmer_len: usize,
+    pub kmer_len: (usize, usize),
     pub min_gap: usize,
     pub max_gap: usize,
     pub phantom: PhantomData<M>,
@@ -51,14 +51,27 @@ where
     }
 
     pub fn new(kmer_len: usize, min_gap: usize, max_gap: usize) -> GappedKmerCtr<M> {
-        let len: usize = 4usize.pow(kmer_len as u32);
+        let len: usize = 4_usize.pow(kmer_len as u32);
         GappedKmerCtr {
             ctr: Array3::zeros((len, len, max_gap - min_gap + 1)),
-            kmer_len: kmer_len,
+            kmer_len: (kmer_len, kmer_len),
             min_gap: min_gap,
             max_gap: max_gap,
             phantom: PhantomData,
         }
+    }
+
+    pub fn rect(width: usize, gap: usize, height: usize) -> GappedKmerCtr<M> {
+        let left: usize = 4_usize.pow(width as u32);
+        let right: usize = 4_usize.pow(height as u32);
+        GappedKmerCtr {
+            ctr: Array3::zeros((left, right,  1)),
+            kmer_len: (width, height),
+            min_gap: gap,
+            max_gap: gap,
+            phantom: PhantomData,
+        }
+
     }
 
     /// eg, foo.get(b"ATGC", b"TTCA", 0) -> 10
@@ -83,17 +96,18 @@ where
 
     /// given a sequence, increment all kmers
     pub fn update_with_seq(&mut self, seq: &[u8]) {
+        /*
         // annoying - work around borrow-checking
         let kmer_len = self.kmer_len;
         let min_gap = self.min_gap;
         let max_gap = self.max_gap;
-
-        for gap in min_gap..max_gap + 1 {
-            for i in 0..1 + seq.len() - (2 * kmer_len + gap) {
+         */
+        for gap in self.min_gap..self.max_gap + 1 {
+            for i in 0..1 + seq.len() - (self.kmer_len.0 + self.kmer_len.1 + gap) {
                 self.incr(
-                    &seq[i..i + kmer_len],
-                    &seq[i + kmer_len + gap..i + 2 * kmer_len + gap],
-                    gap - min_gap,
+                    &seq[i..1 + i + self.kmer_len.0],
+                    &seq[i + self.kmer_len.0 + gap..1 + i + self.kmer_len.0 + self.kmer_len.1 + gap],
+                    gap - self.min_gap,
                 );
             }
         }
