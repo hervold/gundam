@@ -25,6 +25,10 @@ path = "src/converge.rs"
 name = "gundam_match"
 path = "src/match.rs"
 
+[[bin]]
+name = "gundam_condense"
+path = "src/condense.rs"
+
 [dependencies]
 bio = { path="../rust-bio" }
 #"0.25"

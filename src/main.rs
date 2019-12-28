@@ -20,7 +20,7 @@ use gundam::*;
 use ndarray::prelude::Array2;
 use suffix::SuffixTable;
 
-use std::cmp::min;
+use std::cmp::{max, min};
 use std::env;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -67,7 +67,7 @@ fn main() -> Result<(), Box<Error>> {
 
     let file = File::open(&args[1]).expect("can't open index file");
     let idx_file = BufReader::new(&file);
-    let indices: Vec<(usize, usize, usize, f64)> = idx_file
+    let indices: Vec<IndexRep> = idx_file
         .lines()
         .map(|line| {
             let a = line
@@ -75,14 +75,20 @@ fn main() -> Result<(), Box<Error>> {
                 .expect("no line?")
                 .split(",")
                 .collect::<Vec<&str>>();
-            (
-                a[0].parse::<usize>().expect("first"),
-                a[1].parse::<usize>().expect("second"),
-                a[2].parse::<usize>().expect("third"),
-                a[3].parse::<f64>().expect("fourth"),
-            )
+
+            IndexRep {
+                kmer1: a[0].parse::<usize>().expect("1st"),
+                gap: a[1].parse::<usize>().expect("2nd"),
+                kmer2: a[2].parse::<usize>().expect("3rd"),
+                kmer1_idx: a[3].parse::<usize>().expect("4th"),
+                kmer2_idx: a[4].parse::<usize>().expect("5th"),
+                p_val: a[5].parse::<f64>().expect("6th"),
+            }
         })
         .collect();
+
+    info!("finished reading file; found {} indices", indices.len());
+    info!("~~~~ indices: {:#?}", &indices);
 
     let pos = read_seqs(&args[2]);
     let neg = read_seqs(&args[3]);
@@ -91,7 +97,8 @@ fn main() -> Result<(), Box<Error>> {
     // the "mean" of matching sequences
     // then collect the degenerate representation of these motifs into a Vec
     let indices_len = indices.len();
-    let log_every = min(10_000, indices_len / 50);
+    let log_every = max(1, min(10_000, indices_len / 50));
+    info!("logging every {}", log_every);
     let mut degen_motifs = indices
         .into_iter()
         .enumerate()
@@ -107,14 +114,25 @@ fn main() -> Result<(), Box<Error>> {
                 1 => {
                     if ct % log_every == 0 {
                         info!(
-                            "-- motif - pos: {}/{}, neg: {}/{}",
+                            "-- motif - pos: {}/{}, neg: {}",
                             motif_v_from_idx[0].pos_seqs.len(),
                             pos.len(),
-                            motif_v_from_idx[0].neg_seqs.len(),
-                            neg.len()
+                            motif_v_from_idx[0].neg_seq_ct,
                         );
                     }
                     let mean = motif_v_from_idx[0].refine_mean();
+                    if ct % log_every == 0 {
+                        info!(
+                            "-- index {}: {} -> {}",
+                            ct,
+                            str::from_utf8(
+                                motif_v_from_idx[0].motif.degenerate_consensus().as_ref()
+                            )
+                            .unwrap(),
+                            str::from_utf8(mean.motif.degenerate_consensus().as_ref()).unwrap()
+                        );
+                    }
+
                     Some(mean.motif.degenerate_consensus())
                 }
                 _ => unreachable!(),

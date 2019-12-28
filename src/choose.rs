@@ -20,14 +20,21 @@ fn main() {
         exit(1);
     }
 
-    let kmer_specs = vec![
-        (KMER_LEN, MIN_GAP, MAX_GAP), // 5, 0, 20
-        (4, 0, 2),
-        (3, 0, 2),
-    ];
-    for (i, j, k, f) in
-        DyadMotif::<DNAMotif>::passing_kmers(args[1].as_str(), args[2].as_str(), &kmer_specs)
-    {
-        println!("{},{},{},{:e}", i, j, k, f);
+    for motif_len in &[10, 15, 20, 25] {
+        for rec in
+            DyadMotif::<DNAMotif>::passing_kmers(*motif_len, args[1].as_str(), args[2].as_str())
+        {
+            println!(
+                "{},{},{},{},{},{:e},{},{}",
+                rec.kmer1,
+                rec.gap,
+                rec.kmer2,
+                rec.kmer1_idx,
+                rec.kmer2_idx,
+                rec.p_val,
+                Seq(GappedKmerCtr::<DNAMotif>::int_to_kmer(rec.kmer1, rec.kmer1_idx).as_ref()),
+                Seq(GappedKmerCtr::<DNAMotif>::int_to_kmer(rec.kmer2, rec.kmer2_idx).as_ref()),
+            );
+        }
     }
 }

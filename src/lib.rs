@@ -79,11 +79,14 @@ pub fn scaled_fisher(_ct1: usize, _tot1: usize, _ct2: usize, _tot2: usize) -> f6
         (max(1, (scale * _ct2 as f64) as i32), 10_000)
     };
 
-    info!(
-        "[[{},{}],[{},{}]] -> [[{},{}],[{},{}]]",
-        _ct1, _tot1, _ct2, _tot2, ct1, tot1, ct2, tot2
-    );
-    fishers_exact(&[ct1, ct2, tot1, tot2], TestTails::One)
+    let ret = fishers_exact(&[ct1, ct2, tot1, tot2], TestTails::One);
+    if ret < 0.001 {
+        debug!(
+            "fisher: [[{},{}],[{},{}]] -> [[{},{}],[{},{}]] -> {}",
+            _ct1, _tot1, _ct2, _tot2, ct1, tot1, ct2, tot2, ret
+        );
+    }
+    ret
 }
 
 /*
@@ -244,7 +247,7 @@ mod tests {
     #[test]
     #[ignore]
     fn test_find() {
-        let v = DyadMotif::<DNAMotif>::passing_kmers(POS_FNAME, NEG_FNAME, vec![].as_ref());
+        let v = DyadMotif::<DNAMotif>::passing_kmers(10, POS_FNAME, NEG_FNAME);
         let pos = read_seqs(POS_FNAME);
         let neg = read_seqs(NEG_FNAME);
         let dyads: Vec<DyadMotif<DNAMotif>> = DyadMotif::<DNAMotif>::motifs(v, &pos, &neg, choose);
